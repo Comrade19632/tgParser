@@ -9,9 +9,11 @@ from sqlalchemy.dialects.postgresql import insert
 from telethon import errors
 
 from .db import SessionLocal
-from .models import Account, AccountStatus, Channel, ChannelAccessStatus, ChannelType, Post
+from .models import Account, AccountStatus, Channel, ChannelAccessStatus, Post
 from .notify import notify_admin, notify_team
 from .telethon.account_service import TelethonConfigError
+from .telethon.dialogs import get_entity_from_dialogs
+from .telethon.join_service import ensure_joined
 from .telethon_client import connected_client
 
 log = logging.getLogger(__name__)
@@ -40,45 +42,11 @@ def _is_account_ready(acc: Account, *, now: datetime) -> bool:
 def _channel_is_actionable(ch: Channel) -> bool:
     if not ch.is_active:
         return False
-    # Keep scope tight for v1 parser engine: only parse channels that are already accessible.
-    return ch.access_status in {ChannelAccessStatus.active, ChannelAccessStatus.joined}
-
-
-def _normalize_entity_ref(ch: Channel) -> str:
-    """Normalize stored channel identifier into a Telethon-friendly entity reference.
-
-    tgreact practice: prefer passing username/@username into get_entity (no manual ResolveUsername).
-
-    Stored forms we may have in DB:
-    - public: "fridaymark" / "@fridaymark" / "https://t.me/fridaymark"
-    - private: invite hash "k_Z9..." or full invite link "https://t.me/+k_Z9..."
-    """
-
-    raw = (ch.identifier or "").strip()
-    if not raw:
-        return raw
-
-    if ch.type == ChannelType.public:
-        # Telethon get_entity() is most reliable with a bare username or @username.
-        if raw.startswith("http://") or raw.startswith("https://"):
-            raw = raw.split("t.me/", 1)[-1]
-            raw = raw.split("/", 1)[0]
-        elif raw.startswith("t.me/"):
-            raw = raw.split("t.me/", 1)[-1]
-            raw = raw.split("/", 1)[0]
-
-        username = raw.lstrip("@").strip()
-        return f"@{username}" if username else raw
-
-    # private
-    if raw.startswith("http://") or raw.startswith("https://"):
-        return raw
-    if raw.startswith("t.me/"):
-        return "https://" + raw
-    if raw.startswith("+"):
-        return f"https://t.me/{raw}"
-    # assume it's an invite hash
-    return f"https://t.me/+{raw}"
+    # v1 rule: we still *try* to ensure_joined before parsing.
+    # Hard skip only if we already know it's forbidden.
+    if ch.access_status == ChannelAccessStatus.forbidden:
+        return False
+    return True
 
 
 def _normalize_text(text: str | None) -> str:
@@ -87,10 +55,9 @@ def _normalize_text(text: str | None) -> str:
 
 def _build_message_url(*, ch: Channel, entity, message_id: int) -> str:
     # Public channels: stable canonical URL.
-    if ch.type == ChannelType.public:
-        username = (getattr(entity, "username", None) or ch.identifier or "").lstrip("@").strip()
-        if username:
-            return f"https://t.me/{username}/{message_id}"
+    username = (getattr(entity, "username", None) or ch.identifier or "").lstrip("@").strip()
+    if username:
+        return f"https://t.me/{username}/{message_id}"
 
     # Private channels: best-effort.
     ent_id = getattr(entity, "id", None)
@@ -133,13 +100,6 @@ async def parse_new_posts_once() -> ParseSummary:
     for ch in actionable_channels:
         checked += 1
 
-        with SessionLocal() as db:
-            db_ch = db.get(Channel, ch.id)
-            if not db_ch:
-                continue
-
-        entity_ref = _normalize_entity_ref(db_ch)
-
         last_exc: Exception | None = None
         parsed = False
 
@@ -149,13 +109,61 @@ async def parse_new_posts_once() -> ParseSummary:
                     if not await client.is_user_authorized():
                         continue
 
-                    entity = await client.get_entity(entity_ref)
-
+                    # 1) Prefer dialogs entity (membership-aware) to avoid resolve username.
                     with SessionLocal() as db:
                         db_ch = db.get(Channel, ch.id)
                         if not db_ch:
                             parsed = True
                             break
+
+                    entity = await get_entity_from_dialogs(client=client, ch=db_ch)
+
+                    # 2) If not found in dialogs, try to join (public: JoinChannel, private: ImportChatInvite).
+                    if entity is None and db_ch.access_status not in {
+                        ChannelAccessStatus.joined,
+                        ChannelAccessStatus.active,
+                    }:
+                        join_res = await ensure_joined(client=client, ch=db_ch)
+
+                        with SessionLocal() as db:
+                            ch2 = db.get(Channel, ch.id)
+                            if ch2:
+                                ch2.last_checked_at = now
+                                if join_res.access_status is not None:
+                                    ch2.access_status = join_res.access_status
+                                ch2.last_error = join_res.note if not join_res.ok else ""
+
+                                ent = join_res.entity
+                                ent_id = getattr(ent, "id", None)
+                                if isinstance(ent_id, int) and ent_id:
+                                    ch2.peer_id = int(ent_id)
+                                ent_title = getattr(ent, "title", None)
+                                if isinstance(ent_title, str) and ent_title.strip():
+                                    ch2.title = ent_title.strip()
+
+                                db.commit()
+
+                        if join_res.ok:
+                            # Try dialogs again after joining.
+                            with SessionLocal() as db:
+                                db_ch = db.get(Channel, ch.id)
+                            if db_ch:
+                                entity = join_res.entity or await get_entity_from_dialogs(client=client, ch=db_ch)
+
+                    if entity is None:
+                        # Not parsable for this account; continue to next account.
+                        continue
+
+                    # 3) Parse posts.
+                    with SessionLocal() as db:
+                        db_ch = db.get(Channel, ch.id)
+                        if not db_ch:
+                            parsed = True
+                            break
+
+                        # If entity exists, channel is accessible.
+                        if db_ch.access_status not in {ChannelAccessStatus.active, ChannelAccessStatus.joined}:
+                            db_ch.access_status = ChannelAccessStatus.joined
 
                         cursor = int(db_ch.cursor_message_id or 0)
                         max_seen_id = cursor
@@ -212,11 +220,9 @@ async def parse_new_posts_once() -> ParseSummary:
                         inserted_total += inserted
 
                         log.info(
-                            "parser: channel=%s type=%s ident=%s ref=%s cursor=%s->%s fetched=%s inserted~=%s",
+                            "parser: channel=%s ident=%s cursor=%s->%s fetched=%s inserted~=%s",
                             db_ch.id,
-                            db_ch.type,
                             db_ch.identifier,
-                            entity_ref,
                             cursor,
                             db_ch.cursor_message_id,
                             len(rows),
@@ -267,9 +273,8 @@ async def parse_new_posts_once() -> ParseSummary:
                     db.commit()
 
             log.warning(
-                "parser: no eligible account for channel (id=%s ref=%s last_err=%s)",
+                "parser: no eligible account for channel (id=%s last_err=%s)",
                 ch.id,
-                entity_ref,
                 f"{type(last_exc).__name__}: {last_exc}" if last_exc else "<none>",
             )
             continue

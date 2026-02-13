@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -80,6 +80,11 @@ class Channel(Base):
     )
 
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Best-effort numeric peer id used to find entity via dialogs (reduces resolve/get_entity calls).
+    # For public channels this is optional; for private channels it helps a lot.
+    peer_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
     cursor_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
 
