@@ -170,6 +170,20 @@ async def parse_new_posts_once() -> ParseSummary:
                     entity = await client.get_entity(entity_ref)
                     picked = (acc, client, entity)
                     break
+            except errors.FloodError as e:
+                last_exc = e
+                # Quarantine frozen accounts eagerly.
+                if "FROZEN_METHOD_INVALID" in str(e):
+                    with SessionLocal() as db:
+                        db_acc = db.get(Account, acc.id)
+                        if db_acc:
+                            db_acc.status = AccountStatus.banned
+                            db_acc.is_active = False
+                            db_acc.last_error = f"Frozen: {e}"
+                            db_acc.updated_at = now
+                            db.commit()
+                    log.warning("parser: quarantined frozen account id=%s", acc.id)
+                continue
             except Exception as e:
                 last_exc = e
                 # keep trying other accounts
