@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tgparser}
+      POSTGRES_USER: ${POSTGRES_USER:-tgparser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tgparser}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+
+  bot:
+    build: .
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    command: ["python", "-m", "tgparser.bot"]
+    restart: unless-stopped
+
+  worker:
+    build: .
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    command: ["python", "-m", "tgparser.worker"]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
