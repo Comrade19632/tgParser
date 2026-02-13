@@ -10,6 +10,8 @@ from sqlalchemy.dialects.postgresql import insert
 from .db import SessionLocal
 from .models import Account, AccountStatus, Channel, ChannelAccessStatus, ChannelType, Post
 from .telethon.account_service import TelethonConfigError
+from telethon import errors
+
 from .telethon_client import connected_client
 
 log = logging.getLogger(__name__)
@@ -139,37 +141,59 @@ async def parse_new_posts_once() -> ParseSummary:
             posts_inserted=0,
         )
 
-    # v1: single account for the whole tick.
-    account = ready_accounts[0]
-
     inserted_total = 0
     checked = 0
 
-    try:
-        async with connected_client(account=account) as client:
-            # Basic sanity: ensure session is authorized.
-            if not await client.is_user_authorized():
-                log.warning("parser: account not authorized at runtime (id=%s)", account.id)
-                return ParseSummary(
-                    channels_total=len(actionable_channels),
-                    channels_checked=0,
-                    channels_skipped_no_account=len(actionable_channels),
-                    posts_inserted=0,
-                )
+    # v1+: per-channel account selection (simple): try ready accounts until one can access/resolve.
+    for ch in actionable_channels:
+        checked += 1
 
-            for ch in actionable_channels:
-                checked += 1
+        with SessionLocal() as db:
+            db_ch = db.get(Channel, ch.id)
+            if not db_ch:
+                continue
+            cursor = int(db_ch.cursor_message_id or 0)
 
-                with SessionLocal() as db:
-                    db_ch = db.get(Channel, ch.id)
-                    if not db_ch:
+        entity_ref = _normalize_entity_ref(db_ch)
+
+        # Try accounts one by one.
+        picked = None
+        last_exc: Exception | None = None
+        for acc in ready_accounts:
+            try:
+                async with connected_client(account=acc) as client:
+                    if not await client.is_user_authorized():
                         continue
+                    entity = await client.get_entity(entity_ref)
+                    picked = (acc, client, entity)
+                    break
+            except errors.FloodError as e:
+                # Freeze/ban-like situations can manifest as FROZEN_METHOD_INVALID.
+                last_exc = e
+                continue
+            except Exception as e:
+                last_exc = e
+                continue
 
-                    cursor = int(db_ch.cursor_message_id or 0)
+        if not picked:
+            with SessionLocal() as db:
+                db_ch = db.get(Channel, ch.id)
+                if db_ch:
+                    db_ch.last_error = f"Resolve/access failed: {type(last_exc).__name__}: {last_exc}" if last_exc else "Resolve/access failed"
+                    db_ch.last_checked_at = now
+                    db.commit()
+            log.warning("parser: no eligible account for channel (id=%s ref=%s)", ch.id, entity_ref)
+            continue
 
-                    try:
-                        entity_ref = _normalize_entity_ref(db_ch)
-                        entity = await client.get_entity(entity_ref)
+        acc, client, entity = picked
+
+        with SessionLocal() as db:
+            db_ch = db.get(Channel, ch.id)
+            if not db_ch:
+                continue
+            cursor = int(db_ch.cursor_message_id or 0)
+
+            try:
 
                         max_seen_id = cursor
                         rows = []
@@ -240,30 +264,27 @@ async def parse_new_posts_once() -> ParseSummary:
                             inserted,
                         )
 
-                    except TelethonConfigError as e:
-                        # Global issue (account missing api_id/api_hash).
-                        log.warning("parser: telethon config error: %s", e)
-                        return ParseSummary(
-                            channels_total=len(actionable_channels),
-                            channels_checked=checked,
-                            channels_skipped_no_account=0,
-                            posts_inserted=inserted_total,
-                        )
-                    except Exception as e:
-                        with SessionLocal() as db:
-                            db_ch = db.get(Channel, ch.id)
-                            if db_ch:
-                                db_ch.last_error = f"{type(e).__name__}: {e}"
-                                db_ch.last_checked_at = now
-                                db.commit()
-                        log.exception(
-                            "parser: channel failed (id=%s ident=%s)",
-                            ch.id,
-                            ch.identifier,
-                        )
-
-    except Exception:
-        log.exception("parser: client scope failed (account_id=%s)", account.id)
+            except TelethonConfigError as e:
+                log.warning("parser: telethon config error: %s", e)
+                # If config is missing for the picked account, we can't proceed meaningfully.
+                return ParseSummary(
+                    channels_total=len(actionable_channels),
+                    channels_checked=checked,
+                    channels_skipped_no_account=0,
+                    posts_inserted=inserted_total,
+                )
+            except Exception as e:
+                with SessionLocal() as db:
+                    db_ch = db.get(Channel, ch.id)
+                    if db_ch:
+                        db_ch.last_error = f"{type(e).__name__}: {e}"
+                        db_ch.last_checked_at = now
+                        db.commit()
+                log.exception(
+                    "parser: channel failed (id=%s ident=%s)",
+                    ch.id,
+                    ch.identifier,
+                )
 
     return ParseSummary(
         channels_total=len(actionable_channels),
