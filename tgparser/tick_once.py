@@ -26,8 +26,15 @@ async def _run_once(*, force: bool) -> int:
         await tick(r, tick_id=tick_id)
         return 0
     finally:
-        if token:
-            await release_lock(r, token=token)
+        try:
+            if token:
+                await release_lock(r, token=token)
+        finally:
+            # Avoid "Event loop is closed" warnings on interpreter shutdown.
+            try:
+                await r.aclose()
+            except Exception:
+                pass
 
 
 def main() -> None:
