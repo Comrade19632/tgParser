@@ -7,22 +7,9 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from .models import Account
-from .settings import settings
+from .telethon.account_service import TelethonConfigError, _require_telethon_config
 
 log = logging.getLogger(__name__)
-
-
-class TelethonConfigError(RuntimeError):
-    pass
-
-
-def _require_telethon_config() -> tuple[int, str]:
-    if not settings.telethon_api_id or not settings.telethon_api_hash:
-        raise TelethonConfigError(
-            "Telethon credentials are not configured. "
-            "Set TELETHON_API_ID and TELETHON_API_HASH in .env"
-        )
-    return int(settings.telethon_api_id), str(settings.telethon_api_hash)
 
 
 def build_client(*, account: Account) -> TelegramClient:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import redis.asyncio as redis
 from sqlalchemy import select
@@ -10,7 +10,8 @@ from sqlalchemy import select
 from .db import Base, SessionLocal, engine
 from .models import Account, AccountStatus
 from .settings import settings
-from .telethon_client import TelethonConfigError, connected_client
+from .telethon.account_service import TelethonAccountService, TelethonConfigError
+from .telethon.session_storage import DbSessionStorage
 
 log = logging.getLogger(__name__)
 
@@ -43,53 +44,47 @@ async def _update_accounts_status() -> None:
     - other errors => error
     """
 
+    # Lazy init: keep worker booting even if Telethon deps/config missing.
     try:
-        # Lazy import: keep worker booting even if Telethon deps/config missing.
-        from telethon.errors import FloodWaitError
+        service = TelethonAccountService(session_storage=DbSessionStorage())
     except Exception:  # pragma: no cover
-        log.exception("telethon import failed")
+        log.exception("telethon service init failed")
         return
 
     with SessionLocal() as db:
-        accounts = list(db.execute(select(Account).order_by(Account.id.asc())).scalars())
+        accounts = list(db.execute(select(Account.id).order_by(Account.id.asc())).scalars())
 
         if not accounts:
             log.info("accounts: none")
             return
 
         checked = 0
-        for acc in accounts:
+        for account_id in accounts:
             checked += 1
 
-            if not (acc.session_string or "").strip():
-                acc.status = AccountStatus.auth_required
-                acc.last_error = "Missing session_string"
-                acc.updated_at = datetime.now(timezone.utc)
-                continue
-
             try:
-                async with connected_client(account=acc) as client:
-                    if not await client.is_user_authorized():
-                        acc.status = AccountStatus.auth_required
-                        acc.last_error = "Session is not authorized"
-                    else:
-                        me = await client.get_me()
-                        acc.status = AccountStatus.active
-                        acc.last_error = f"OK: {getattr(me, 'username', None) or getattr(me, 'id', 'me')}"
-            except FloodWaitError as e:
-                seconds = int(getattr(e, "seconds", 0) or 0)
-                acc.status = AccountStatus.cooldown
-                acc.cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-                acc.last_error = f"FloodWait: {seconds}s"
+                health = await service.check(account_id=account_id)
+
+                acc = db.get(Account, account_id)
+                if not acc:
+                    continue
+
+                acc.status = health.status
+                acc.last_error = health.last_error
+                acc.cooldown_until = health.cooldown_until
             except TelethonConfigError as e:
                 # Config issue is global; no point iterating further.
                 log.warning("telethon: config error: %s", e)
                 break
             except Exception as e:
-                acc.status = AccountStatus.error
-                acc.last_error = f"{type(e).__name__}: {e}"
+                acc = db.get(Account, account_id)
+                if acc:
+                    acc.status = AccountStatus.error
+                    acc.last_error = f"{type(e).__name__}: {e}"
             finally:
-                acc.updated_at = datetime.now(timezone.utc)
+                acc = db.get(Account, account_id)
+                if acc:
+                    acc.updated_at = datetime.now(timezone.utc)
 
         db.commit()
         log.info("accounts: checked=%s", checked)
