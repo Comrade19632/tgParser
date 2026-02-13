@@ -1,7 +1,7 @@
 """add channel peer_id
 
 Revision ID: c3e4a2b1d9aa
-Revises: b7b0d1c3a4ef
+Revises: 1f4c9d2a7e11
 Create Date: 2026-02-13
 
 """
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "c3e4a2b1d9aa"
-down_revision = "b7b0d1c3a4ef"
+down_revision = "1f4c9d2a7e11"
 branch_labels = None
 depends_on = None
 
