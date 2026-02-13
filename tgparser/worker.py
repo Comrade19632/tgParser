@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,7 +20,10 @@ log = logging.getLogger(__name__)
 
 
 LOCK_KEY = "tgparser:tick:lock"
-LOCK_TTL_SECONDS = 60 * 55  # avoid overlapping hour ticks
+# TTL should cover the whole tick even if it runs long, otherwise another worker could
+# acquire the lock after expiry and overlap.
+# Keep a sane minimum (55m) but also tie it to the configured interval.
+LOCK_TTL_SECONDS = max(60 * 55, settings.tick_interval_seconds + 300)
 
 TICK_SEQ_KEY = "tgparser:tick:seq"
 LAST_TICK_KEY = "tgparser:tick:last"  # Redis hash
@@ -28,6 +32,14 @@ LAST_TICK_KEY = "tgparser:tick:last"  # Redis hash
 _RELEASE_LOCK_LUA = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
   return redis.call('DEL', KEYS[1])
+else
+  return 0
+end
+"""
+
+_REFRESH_LOCK_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('EXPIRE', KEYS[1], ARGV[2])
 else
   return 0
 end
@@ -55,6 +67,25 @@ async def release_lock(r: redis.Redis, *, token: str) -> None:
         await r.eval(_RELEASE_LOCK_LUA, 1, LOCK_KEY, token)
     except Exception:
         log.exception("Failed to release lock")
+
+
+async def _lock_refresher(r: redis.Redis, *, token: str, interval_s: int = 30) -> None:
+    """Keep the tick lock alive while the tick is running.
+
+    Without this, a long-running tick could outlive the TTL and allow another worker
+    to acquire the lock, causing overlapping work.
+    """
+
+    interval_s = max(5, int(interval_s))
+    try:
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                await r.eval(_REFRESH_LOCK_LUA, 1, LOCK_KEY, token, str(LOCK_TTL_SECONDS))
+            except Exception:
+                log.exception("Failed to refresh lock")
+    except asyncio.CancelledError:
+        return
 
 
 @dataclass(frozen=True)
@@ -223,9 +254,13 @@ async def main() -> None:
             log.info("tick: skipped (lock held)")
         else:
             tick_id = int(await r.incr(TICK_SEQ_KEY))
+            refresher = asyncio.create_task(_lock_refresher(r, token=token))
             try:
                 await tick(r, tick_id=tick_id)
             finally:
+                refresher.cancel()
+                with contextlib.suppress(Exception):
+                    await refresher
                 await release_lock(r, token=token)
 
         await asyncio.sleep(settings.tick_interval_seconds)
