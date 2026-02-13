@@ -59,14 +59,17 @@ def _normalize_entity_ref(ch: Channel) -> str:
         return raw
 
     if ch.type == ChannelType.public:
+        # Telethon get_entity() is most reliable with a bare username or @username.
+        # Passing full URLs can work in some cases but has proven flaky across DCs/edge cases.
         if raw.startswith("http://") or raw.startswith("https://"):
-            return raw
-        if raw.startswith("t.me/"):
-            return "https://" + raw
-        if raw.startswith("@"):  # ok
-            return raw
-        # bare username
-        return f"https://t.me/{raw.lstrip('@')}"
+            raw = raw.split("t.me/", 1)[-1]
+            raw = raw.split("/", 1)[0]
+        elif raw.startswith("t.me/"):
+            raw = raw.split("t.me/", 1)[-1]
+            raw = raw.split("/", 1)[0]
+
+        username = raw.lstrip("@").strip()
+        return f"@{username}" if username else raw
 
     # private
     if raw.startswith("http://") or raw.startswith("https://"):
@@ -167,12 +170,9 @@ async def parse_new_posts_once() -> ParseSummary:
                     entity = await client.get_entity(entity_ref)
                     picked = (acc, client, entity)
                     break
-            except errors.FloodError as e:
-                # Freeze/ban-like situations can manifest as FROZEN_METHOD_INVALID.
-                last_exc = e
-                continue
             except Exception as e:
                 last_exc = e
+                # keep trying other accounts
                 continue
 
         if not picked:
@@ -182,7 +182,12 @@ async def parse_new_posts_once() -> ParseSummary:
                     db_ch.last_error = f"Resolve/access failed: {type(last_exc).__name__}: {last_exc}" if last_exc else "Resolve/access failed"
                     db_ch.last_checked_at = now
                     db.commit()
-            log.warning("parser: no eligible account for channel (id=%s ref=%s)", ch.id, entity_ref)
+            log.warning(
+                "parser: no eligible account for channel (id=%s ref=%s last_err=%s)",
+                ch.id,
+                entity_ref,
+                f"{type(last_exc).__name__}: {last_exc}" if last_exc else "<none>",
+            )
             continue
 
         acc, client, entity = picked

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from telethon.errors import FloodWaitError
+from telethon import errors
 from telethon.sessions import StringSession
 
 from sqlalchemy import select
@@ -92,6 +93,12 @@ class TelethonAccountService:
                 cooldown_until=datetime.now(timezone.utc) + timedelta(seconds=seconds),
                 last_error=f"FloodWait: {seconds}s",
             )
+        except errors.FloodError as e:
+            # Telegram may freeze accounts; this often manifests as FROZEN_METHOD_INVALID.
+            msg = str(e)
+            if "FROZEN_METHOD_INVALID" in msg:
+                return AccountHealth(status=AccountStatus.banned, last_error=f"Frozen: {msg}")
+            return AccountHealth(status=AccountStatus.error, last_error=f"FloodError: {msg}")
         except TelethonConfigError:
             raise
         except Exception as e:
