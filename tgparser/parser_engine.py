@@ -138,7 +138,14 @@ async def parse_new_posts_once() -> ParseSummary:
                         max_seen_id = cursor
                         rows = []
 
-                        async for msg in client.iter_messages(entity, min_id=cursor, reverse=True):
+                        # If cursor is empty (new channel), avoid crawling full history.
+                        # Fetch a small tail of latest messages and set cursor accordingly.
+                        if cursor <= 0:
+                            msg_iter = client.iter_messages(entity, limit=20)
+                        else:
+                            msg_iter = client.iter_messages(entity, min_id=cursor, reverse=True)
+
+                        async for msg in msg_iter:
                             # iter_messages can return service messages; keep only real content.
                             text = _normalize_text(getattr(msg, "message", None))
                             if not text:
