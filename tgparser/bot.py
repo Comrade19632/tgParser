@@ -2,31 +2,14 @@ from __future__ import annotations
 
 import logging
 
-from aiogram import Bot, Dispatcher
-from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram import Bot
 
+from .botui import setup_dispatcher
 from .settings import settings
 
 log = logging.getLogger(__name__)
 
-
-dp = Dispatcher()
-
-
-@dp.message(Command("start"))
-async def start(m: Message):
-    await m.answer(
-        "TG Parser bot online.\n\n"
-        "Planned menus: Accounts / Channels / Status.\n"
-        "Commands: /status"
-    )
-
-
-@dp.message(Command("status"))
-async def status(m: Message):
-    # Placeholder: later show accounts/channels count + last worker tick
-    await m.answer("Status: ok (scaffold).")
+dp = setup_dispatcher()
 
 
 async def main():
