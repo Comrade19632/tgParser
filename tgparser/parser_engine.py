@@ -12,6 +12,7 @@ from .models import Account, AccountStatus, Channel, ChannelAccessStatus, Channe
 from .telethon.account_service import TelethonConfigError
 from telethon import errors
 
+from .notify import notify_admin
 from .telethon_client import connected_client
 
 log = logging.getLogger(__name__)
@@ -183,6 +184,9 @@ async def parse_new_posts_once() -> ParseSummary:
                             db_acc.updated_at = now
                             db.commit()
                     log.warning("parser: quarantined frozen account id=%s", acc.id)
+                    await notify_admin(
+                        f"⚠️ TG Parser: аккаунт заморожен (FROZEN_METHOD_INVALID). id={acc.id} phone={getattr(acc, 'phone_number', '') or ''}"
+                    )
                 continue
             except Exception as e:
                 last_exc = e
