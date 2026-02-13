@@ -38,12 +38,21 @@ async def notify_admin(text: str) -> None:
 
 
 async def notify_team(text: str) -> None:
-    """Notify all bot users (best-effort)."""
+    """Notify staff bot users (best-effort).
+
+    Rule (owner): notifications should go only to users with is_staff=true
+    (optionally also require notify_enabled=true).
+    """
 
     bot = Bot(token=settings.bot_token)
     try:
         with SessionLocal() as db:
-            user_ids = list(db.query(BotUser.telegram_user_id).distinct().all())
+            user_ids = (
+                db.query(BotUser.telegram_user_id)
+                .filter(BotUser.is_staff.is_(True), BotUser.notify_enabled.is_(True))
+                .distinct()
+                .all()
+            )
             user_ids = [int(x[0]) for x in user_ids if x and x[0]]
 
         for uid in user_ids:
