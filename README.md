@@ -14,6 +14,8 @@ cp .env.example .env
 # fill BOT_TOKEN, etc.
 
 docker compose up --build
+
+# DB migrations are applied automatically on startup via Alembic (alembic upgrade head).
 ```
 
 Services:

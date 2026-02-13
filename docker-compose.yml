@@ -16,21 +16,23 @@ services:
   bot:
     build: .
     env_file:
-      - .env
+      - path: .env
+        required: false
     depends_on:
       - db
       - redis
-    command: ["python", "-m", "tgparser.bot"]
+    command: ["sh", "-c", "alembic upgrade head && python -m tgparser.bot"]
     restart: unless-stopped
 
   worker:
     build: .
     env_file:
-      - .env
+      - path: .env
+        required: false
     depends_on:
       - db
       - redis
-    command: ["python", "-m", "tgparser.worker"]
+    command: ["sh", "-c", "alembic upgrade head && python -m tgparser.worker"]
     restart: unless-stopped
 
 volumes:
