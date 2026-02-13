@@ -196,10 +196,13 @@ async def parse_new_posts_once() -> ParseSummary:
 
                         inserted = 0
                         if rows:
+                            # NOTE: psycopg3 may report rowcount=-1 for INSERT .. ON CONFLICT.
+                            # Use RETURNING to get an accurate inserted count (length of returned ids).
                             stmt = insert(Post).values(rows)
                             stmt = stmt.on_conflict_do_nothing(index_elements=[Post.channel_id, Post.message_id])
+                            stmt = stmt.returning(Post.id)
                             res = db.execute(stmt)
-                            inserted = int(getattr(res, "rowcount", 0) or 0)
+                            inserted = len(res.fetchall())
 
                         db_ch.cursor_message_id = max_seen_id if max_seen_id > cursor else cursor
                         db_ch.last_checked_at = now
