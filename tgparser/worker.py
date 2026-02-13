@@ -15,6 +15,7 @@ from .models import Account, AccountStatus
 from .settings import settings
 from .telethon.account_service import TelethonAccountService, TelethonConfigError
 from .telethon.session_storage import DbSessionStorage
+from .parser_engine import parse_new_posts_once
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +97,10 @@ class TickSummary:
     accounts_cooldown: int = 0
     accounts_banned: int = 0
     accounts_error: int = 0
+
+    channels_checked: int = 0
+    channels_total: int = 0
+    posts_inserted: int = 0
 
 
 async def _update_accounts_status() -> TickSummary:
@@ -209,6 +214,9 @@ async def _persist_tick_meta(
             "accounts_cooldown": str(summary.accounts_cooldown),
             "accounts_banned": str(summary.accounts_banned),
             "accounts_error": str(summary.accounts_error),
+            "channels_checked": str(summary.channels_checked),
+            "channels_total": str(summary.channels_total),
+            "posts_inserted": str(summary.posts_inserted),
         },
     )
 
@@ -218,12 +226,14 @@ async def tick(r: redis.Redis, *, tick_id: int) -> None:
 
     summary = await _update_accounts_status()
 
-    # TODO (next tasks):
-    # - select active channels
-    # - rotate across active accounts
-    # - join request / pending approval handling
-    # - fetch new messages
-    # - persist (url/datetime/text) with dedupe
+    # Parser engine (v1): incremental fetch + persist + dedupe.
+    parse_summary = await parse_new_posts_once()
+    summary = TickSummary(
+        **summary.__dict__,
+        channels_checked=parse_summary.channels_checked,
+        channels_total=parse_summary.channels_total,
+        posts_inserted=parse_summary.posts_inserted,
+    )
 
     finished = datetime.now(timezone.utc)
     await _persist_tick_meta(
@@ -235,11 +245,14 @@ async def tick(r: redis.Redis, *, tick_id: int) -> None:
     )
 
     log.info(
-        "tick: ok id=%s duration_s=%.3f accounts_checked=%s errors=%s",
+        "tick: ok id=%s duration_s=%.3f accounts_checked=%s errors=%s channels=%s/%s posts_inserted=%s",
         tick_id,
         (finished - started).total_seconds(),
         summary.accounts_checked,
         summary.accounts_error,
+        summary.channels_checked,
+        summary.channels_total,
+        summary.posts_inserted,
     )
 
 
