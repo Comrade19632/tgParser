@@ -7,6 +7,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tgparser}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tgparser} -d ${POSTGRES_DB:-tgparser}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   redis:
     image: redis:7-alpine
@@ -19,8 +24,10 @@ services:
       - path: .env
         required: false
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     command: ["sh", "-c", "alembic upgrade head"]
     restart: "no"
 

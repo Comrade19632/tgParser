@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -97,4 +97,6 @@ class Post(Base):
 
     __table_args__ = (
         UniqueConstraint("channel_id", "message_id", name="uq_post_channel_message"),
+        Index("ix_posts_original_url", "original_url"),
+        Index("ix_posts_channel_published_at", "channel_id", "published_at"),
     )
