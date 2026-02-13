@@ -66,8 +66,11 @@ class Channel(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
     type: Mapped[ChannelType] = mapped_column(Enum(ChannelType))
-    identifier: Mapped[str] = mapped_column(String(255))  # username or invite
+    identifier: Mapped[str] = mapped_column(String(255))  # username or invite hash
     title: Mapped[str] = mapped_column(String(255), default="")
+
+    # Soft-disable flag for operator control.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     backfill_days: Mapped[int] = mapped_column(Integer, default=0)

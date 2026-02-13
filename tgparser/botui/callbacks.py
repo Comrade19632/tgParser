@@ -12,6 +12,13 @@ ACC_LIST = "accounts:list"
 ACC_DISABLE = "accounts:disable"  # prefix: accounts:disable:<id>
 ACC_REMOVE = "accounts:remove"  # prefix: accounts:remove:<id>
 
+# Channels actions
+CH_ADD_PUBLIC = "channels:add:public"
+CH_ADD_PRIVATE = "channels:add:private"
+CH_LIST = "channels:list"
+CH_DISABLE = "channels:disable"  # prefix: channels:disable:<id>
+CH_ENABLE = "channels:enable"  # prefix: channels:enable:<id>
+
 BACK = "nav:back"
 REFRESH = "nav:refresh"
 

@@ -41,11 +41,10 @@ def get_view(key: str) -> View:
             key=cb.CHANNELS,
             title="Channels",
             body=(
-                "Channels menu (stub).\n\n"
-                "Planned actions:\n"
-                "- Add channel (public @username or link)\n"
-                "- Add channel (private invite link)\n"
-                "- List / remove / backfill_days\n"
+                "Manage channels list:\n\n"
+                "- Add public channel (@username or https://t.me/username)\n"
+                "- Add private channel (invite link)\n"
+                "- List / enable / disable\n"
             ),
         )
     if key == cb.STATUS:
