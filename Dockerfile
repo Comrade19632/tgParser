@@ -8,6 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     build-essential \
+    # Required by opentele/PyQt5 runtime (tdata flow)
+    libglib2.0-0 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
