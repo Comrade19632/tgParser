@@ -4,11 +4,12 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import secrets
 
 import redis.asyncio as redis
 from sqlalchemy import select
 
-from .db import Base, SessionLocal, engine
+from .db import SessionLocal
 from .models import Account, AccountStatus
 from .settings import settings
 from .telethon.account_service import TelethonAccountService, TelethonConfigError
@@ -24,14 +25,34 @@ TICK_SEQ_KEY = "tgparser:tick:seq"
 LAST_TICK_KEY = "tgparser:tick:last"  # Redis hash
 
 
-async def acquire_lock(r: redis.Redis) -> bool:
+_RELEASE_LOCK_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+else
+  return 0
+end
+"""
+
+
+async def acquire_lock(r: redis.Redis) -> str | None:
+    """Acquire tick lock.
+
+    Returns a lock token string when acquired, otherwise None.
+
+    We store a random token as the lock value and only release if it matches,
+    to avoid deleting somebody else's lock in edge cases (TTL expiry, slow tick,
+    or redis failover).
+    """
+
+    token = secrets.token_hex(16)
     # SET key value NX EX
-    return bool(await r.set(LOCK_KEY, "1", nx=True, ex=LOCK_TTL_SECONDS))
+    ok = await r.set(LOCK_KEY, token, nx=True, ex=LOCK_TTL_SECONDS)
+    return token if ok else None
 
 
-async def release_lock(r: redis.Redis) -> None:
+async def release_lock(r: redis.Redis, *, token: str) -> None:
     try:
-        await r.delete(LOCK_KEY)
+        await r.eval(_RELEASE_LOCK_LUA, 1, LOCK_KEY, token)
     except Exception:
         log.exception("Failed to release lock")
 
@@ -194,21 +215,18 @@ async def tick(r: redis.Redis, *, tick_id: int) -> None:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    # Dev convenience: ensure tables exist.
-    Base.metadata.create_all(bind=engine)
-
     r = redis.from_url(settings.redis_url)
 
     while True:
-        got = await acquire_lock(r)
-        if not got:
+        token = await acquire_lock(r)
+        if not token:
             log.info("tick: skipped (lock held)")
         else:
             tick_id = int(await r.incr(TICK_SEQ_KEY))
             try:
                 await tick(r, tick_id=tick_id)
             finally:
-                await release_lock(r)
+                await release_lock(r, token=token)
 
         await asyncio.sleep(settings.tick_interval_seconds)
 
