@@ -42,6 +42,41 @@ def _channel_is_actionable(ch: Channel) -> bool:
     return ch.access_status in {ChannelAccessStatus.active, ChannelAccessStatus.joined}
 
 
+def _normalize_entity_ref(ch: Channel) -> str:
+    """Normalize stored channel identifier into a Telethon-friendly entity reference.
+
+    tgreact practice: prefer passing full link/username into get_entity (no manual ResolveUsername).
+
+    Stored forms we may have in DB:
+    - public: "fridaymark" / "@fridaymark" / "https://t.me/fridaymark"
+    - private: invite hash "k_Z9..." or full invite link "https://t.me/+k_Z9..."
+    """
+
+    raw = (ch.identifier or "").strip()
+    if not raw:
+        return raw
+
+    if ch.type == ChannelType.public:
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return raw
+        if raw.startswith("t.me/"):
+            return "https://" + raw
+        if raw.startswith("@"):  # ok
+            return raw
+        # bare username
+        return f"https://t.me/{raw.lstrip('@')}"
+
+    # private
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    if raw.startswith("t.me/"):
+        return "https://" + raw
+    if raw.startswith("+"):
+        return f"https://t.me/{raw}"
+    # assume it's an invite hash
+    return f"https://t.me/+{raw}"
+
+
 def _normalize_text(text: str | None) -> str:
     return (text or "").strip()
 
@@ -133,7 +168,8 @@ async def parse_new_posts_once() -> ParseSummary:
                     cursor = int(db_ch.cursor_message_id or 0)
 
                     try:
-                        entity = await client.get_entity(db_ch.identifier)
+                        entity_ref = _normalize_entity_ref(db_ch)
+                        entity = await client.get_entity(entity_ref)
 
                         max_seen_id = cursor
                         rows = []
@@ -193,10 +229,11 @@ async def parse_new_posts_once() -> ParseSummary:
                         inserted_total += inserted
 
                         log.info(
-                            "parser: channel=%s type=%s ident=%s cursor=%s->%s fetched=%s inserted~=%s",
+                            "parser: channel=%s type=%s ident=%s ref=%s cursor=%s->%s fetched=%s inserted~=%s",
                             db_ch.id,
                             db_ch.type,
                             db_ch.identifier,
+                            entity_ref,
                             cursor,
                             db_ch.cursor_message_id,
                             len(rows),
