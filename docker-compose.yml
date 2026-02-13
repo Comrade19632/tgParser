@@ -13,7 +13,7 @@ services:
     volumes:
       - redisdata:/data
 
-  bot:
+  migrate:
     build: .
     env_file:
       - path: .env
@@ -21,7 +21,18 @@ services:
     depends_on:
       - db
       - redis
-    command: ["sh", "-c", "alembic upgrade head && python -m tgparser.bot"]
+    command: ["sh", "-c", "alembic upgrade head"]
+    restart: "no"
+
+  bot:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "tgparser.bot"]
     restart: unless-stopped
 
   worker:
@@ -30,9 +41,9 @@ services:
       - path: .env
         required: false
     depends_on:
-      - db
-      - redis
-    command: ["sh", "-c", "alembic upgrade head && python -m tgparser.worker"]
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "tgparser.worker"]
     restart: unless-stopped
 
 volumes:
