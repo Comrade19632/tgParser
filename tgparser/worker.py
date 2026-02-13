@@ -15,7 +15,7 @@ from .models import Account, AccountStatus
 from .settings import settings
 from .telethon.account_service import TelethonAccountService, TelethonConfigError
 from .telethon.session_storage import DbSessionStorage
-from .notify import notify_admin
+from .notify import notify_admin, notify_team
 from .parser_engine import parse_new_posts_once
 
 log = logging.getLogger(__name__)
@@ -150,9 +150,11 @@ async def _update_accounts_status() -> TickSummary:
                 # If Telegram freezes/bans the account, quarantine it automatically.
                 if health.status == AccountStatus.banned:
                     if acc.is_active:
-                        await notify_admin(
+                        msg = (
                             f"⚠️ TG Parser: аккаунт заморожен/забанен. id={acc.id} phone={acc.phone_number or ''} err={health.last_error}"
                         )
+                        await notify_admin(msg)
+                        await notify_team(msg)
                     acc.is_active = False
             except TelethonConfigError as e:
                 # Config issue is global; no point iterating further.
