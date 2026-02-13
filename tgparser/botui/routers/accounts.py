@@ -24,6 +24,7 @@ from ...telethon.onboarding import (
     tdata_to_session_string,
 )
 from ...telethon.session_storage import DbSessionStorage
+from ...user_tracking import track_user
 from ...utils.tdata import TdataArchiveError, extract_tdata_from_archive
 from .. import callbacks as cb
 
@@ -83,6 +84,8 @@ async def _render_accounts_menu(q: CallbackQuery) -> None:
 @router.callback_query(lambda q: q.data == cb.ACCOUNTS)
 async def accounts_menu(q: CallbackQuery) -> None:
     await q.answer()
+    if q.from_user:
+        track_user(q.from_user.id)
     await _render_accounts_menu(q)
 
 

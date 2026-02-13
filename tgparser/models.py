@@ -90,6 +90,16 @@ class Channel(Base):
     )
 
 
+class BotUser(Base):
+    __tablename__ = "bot_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class Post(Base):
     __tablename__ = "posts"
 

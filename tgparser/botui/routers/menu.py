@@ -9,6 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from ...settings import settings
+from ...user_tracking import track_user
 from ...worker import LAST_TICK_KEY
 from .. import callbacks as cb
 from ..keyboards import main_menu_kb, submenu_kb
@@ -92,17 +93,23 @@ async def _render_callback(*, q: CallbackQuery, view_key: str) -> None:
 
 @router.message(Command("start"))
 async def cmd_start(m: Message) -> None:
+    if m.from_user:
+        track_user(m.from_user.id)
     await _render_message(m=m, view_key=cb.MAIN)
 
 
 @router.message(Command("status"))
 async def cmd_status(m: Message) -> None:
+    if m.from_user:
+        track_user(m.from_user.id)
     await _render_message(m=m, view_key=cb.STATUS)
 
 
 @router.callback_query(lambda q: cb.is_menu_callback(q.data))
 async def on_menu(q: CallbackQuery) -> None:
     await q.answer()
+    if q.from_user:
+        track_user(q.from_user.id)
     await _render_callback(q=q, view_key=q.data or cb.MAIN)
 
 
