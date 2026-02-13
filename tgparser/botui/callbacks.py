@@ -5,6 +5,13 @@ ACCOUNTS = "menu:accounts"
 CHANNELS = "menu:channels"
 STATUS = "menu:status"
 
+# Accounts actions
+ACC_ADD_PHONE = "accounts:add:phone"
+ACC_ADD_TDATA = "accounts:add:tdata"
+ACC_LIST = "accounts:list"
+ACC_DISABLE = "accounts:disable"  # prefix: accounts:disable:<id>
+ACC_REMOVE = "accounts:remove"  # prefix: accounts:remove:<id>
+
 BACK = "nav:back"
 REFRESH = "nav:refresh"
 

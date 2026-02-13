@@ -35,8 +35,15 @@ class Account(Base):
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Human-friendly label shown in bot lists. Default: phone number.
     label: Mapped[str] = mapped_column(String(128), default="")
+    phone_number: Mapped[str] = mapped_column(String(32), default="")
+
     onboarding_method: Mapped[str] = mapped_column(String(32), default="")  # phone-code|tdata
+
+    # Soft-disable flag for operator control.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     status: Mapped[AccountStatus] = mapped_column(Enum(AccountStatus), default=AccountStatus.active)
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

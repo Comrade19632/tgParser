@@ -52,7 +52,9 @@ async def _update_accounts_status() -> None:
         return
 
     with SessionLocal() as db:
-        accounts = list(db.execute(select(Account.id).order_by(Account.id.asc())).scalars())
+        accounts = list(
+            db.execute(select(Account.id).where(Account.is_active.is_(True)).order_by(Account.id.asc())).scalars()
+        )
 
         if not accounts:
             log.info("accounts: none")
