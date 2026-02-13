@@ -6,13 +6,12 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
+from telethon import errors
 
 from .db import SessionLocal
 from .models import Account, AccountStatus, Channel, ChannelAccessStatus, ChannelType, Post
-from .telethon.account_service import TelethonConfigError
-from telethon import errors
-
 from .notify import notify_admin
+from .telethon.account_service import TelethonConfigError
 from .telethon_client import connected_client
 
 log = logging.getLogger(__name__)
@@ -48,7 +47,7 @@ def _channel_is_actionable(ch: Channel) -> bool:
 def _normalize_entity_ref(ch: Channel) -> str:
     """Normalize stored channel identifier into a Telethon-friendly entity reference.
 
-    tgreact practice: prefer passing full link/username into get_entity (no manual ResolveUsername).
+    tgreact practice: prefer passing username/@username into get_entity (no manual ResolveUsername).
 
     Stored forms we may have in DB:
     - public: "fridaymark" / "@fridaymark" / "https://t.me/fridaymark"
@@ -61,7 +60,6 @@ def _normalize_entity_ref(ch: Channel) -> str:
 
     if ch.type == ChannelType.public:
         # Telethon get_entity() is most reliable with a bare username or @username.
-        # Passing full URLs can work in some cases but has proven flaky across DCs/edge cases.
         if raw.startswith("http://") or raw.startswith("https://"):
             raw = raw.split("t.me/", 1)[-1]
             raw = raw.split("/", 1)[0]
@@ -95,7 +93,6 @@ def _build_message_url(*, ch: Channel, entity, message_id: int) -> str:
             return f"https://t.me/{username}/{message_id}"
 
     # Private channels: best-effort.
-    # t.me/c/<internal_id>/<message_id> works for many private channels/groups.
     ent_id = getattr(entity, "id", None)
     if isinstance(ent_id, int) and ent_id > 0:
         return f"https://t.me/c/{ent_id}/{message_id}"
@@ -104,30 +101,15 @@ def _build_message_url(*, ch: Channel, entity, message_id: int) -> str:
 
 
 async def parse_new_posts_once() -> ParseSummary:
-    """Parse new posts for all active channels, incrementally.
-
-    v1 scope:
-    - Select one ready account (no rotation yet; see task #146).
-    - For each actionable channel:
-      - fetch messages with id > cursor_message_id
-      - persist (channel_id, message_id, original_url, published_at, text)
-      - dedupe via unique constraint (ON CONFLICT DO NOTHING)
-      - advance cursor_message_id to max fetched id
-
-    NOTE: Join-request / pending approval is handled in a later task (#148).
-    """
+    """Parse new posts for all active channels, incrementally."""
 
     now = datetime.now(timezone.utc)
 
     with SessionLocal() as db:
-        accounts = list(
-            db.execute(select(Account).order_by(Account.id.asc())).scalars()
-        )
+        accounts = list(db.execute(select(Account).order_by(Account.id.asc())).scalars())
         ready_accounts = [a for a in accounts if _is_account_ready(a, now=now)]
 
-        channels = list(
-            db.execute(select(Channel).order_by(Channel.id.asc())).scalars()
-        )
+        channels = list(db.execute(select(Channel).order_by(Channel.id.asc())).scalars())
         actionable_channels = [c for c in channels if _channel_is_actionable(c)]
 
     summary = ParseSummary(channels_total=len(actionable_channels))
@@ -148,7 +130,6 @@ async def parse_new_posts_once() -> ParseSummary:
     inserted_total = 0
     checked = 0
 
-    # v1+: per-channel account selection (simple): try ready accounts until one can access/resolve.
     for ch in actionable_channels:
         checked += 1
 
@@ -156,80 +137,36 @@ async def parse_new_posts_once() -> ParseSummary:
             db_ch = db.get(Channel, ch.id)
             if not db_ch:
                 continue
-            cursor = int(db_ch.cursor_message_id or 0)
 
         entity_ref = _normalize_entity_ref(db_ch)
 
-        # Try accounts one by one.
-        picked = None
         last_exc: Exception | None = None
+        parsed = False
+
         for acc in ready_accounts:
             try:
                 async with connected_client(account=acc) as client:
                     if not await client.is_user_authorized():
                         continue
+
                     entity = await client.get_entity(entity_ref)
-                    picked = (acc, client, entity)
-                    break
-            except errors.FloodError as e:
-                last_exc = e
-                # Quarantine frozen accounts eagerly.
-                if "FROZEN_METHOD_INVALID" in str(e):
+
                     with SessionLocal() as db:
-                        db_acc = db.get(Account, acc.id)
-                        if db_acc:
-                            db_acc.status = AccountStatus.banned
-                            db_acc.is_active = False
-                            db_acc.last_error = f"Frozen: {e}"
-                            db_acc.updated_at = now
-                            db.commit()
-                    log.warning("parser: quarantined frozen account id=%s", acc.id)
-                    await notify_admin(
-                        f"⚠️ TG Parser: аккаунт заморожен (FROZEN_METHOD_INVALID). id={acc.id} phone={getattr(acc, 'phone_number', '') or ''}"
-                    )
-                continue
-            except Exception as e:
-                last_exc = e
-                # keep trying other accounts
-                continue
+                        db_ch = db.get(Channel, ch.id)
+                        if not db_ch:
+                            parsed = True
+                            break
 
-        if not picked:
-            with SessionLocal() as db:
-                db_ch = db.get(Channel, ch.id)
-                if db_ch:
-                    db_ch.last_error = f"Resolve/access failed: {type(last_exc).__name__}: {last_exc}" if last_exc else "Resolve/access failed"
-                    db_ch.last_checked_at = now
-                    db.commit()
-            log.warning(
-                "parser: no eligible account for channel (id=%s ref=%s last_err=%s)",
-                ch.id,
-                entity_ref,
-                f"{type(last_exc).__name__}: {last_exc}" if last_exc else "<none>",
-            )
-            continue
-
-        acc, client, entity = picked
-
-        with SessionLocal() as db:
-            db_ch = db.get(Channel, ch.id)
-            if not db_ch:
-                continue
-            cursor = int(db_ch.cursor_message_id or 0)
-
-            try:
-
+                        cursor = int(db_ch.cursor_message_id or 0)
                         max_seen_id = cursor
-                        rows = []
+                        rows: list[dict] = []
 
-                        # If cursor is empty (new channel), avoid crawling full history.
-                        # Fetch a small tail of latest messages and set cursor accordingly.
                         if cursor <= 0:
                             msg_iter = client.iter_messages(entity, limit=20)
                         else:
                             msg_iter = client.iter_messages(entity, min_id=cursor, reverse=True)
 
                         async for msg in msg_iter:
-                            # iter_messages can return service messages; keep only real content.
                             text = _normalize_text(getattr(msg, "message", None))
                             if not text:
                                 continue
@@ -257,15 +194,11 @@ async def parse_new_posts_once() -> ParseSummary:
                                 }
                             )
 
-                        # Persist and advance cursor.
                         inserted = 0
                         if rows:
                             stmt = insert(Post).values(rows)
-                            stmt = stmt.on_conflict_do_nothing(
-                                index_elements=[Post.channel_id, Post.message_id]
-                            )
+                            stmt = stmt.on_conflict_do_nothing(index_elements=[Post.channel_id, Post.message_id])
                             res = db.execute(stmt)
-                            # SQLAlchemy doesn't reliably report rowcount for DO NOTHING; best-effort.
                             inserted = int(getattr(res, "rowcount", 0) or 0)
 
                         db_ch.cursor_message_id = max_seen_id if max_seen_id > cursor else cursor
@@ -287,27 +220,54 @@ async def parse_new_posts_once() -> ParseSummary:
                             inserted,
                         )
 
+                    parsed = True
+                    break
+
             except TelethonConfigError as e:
                 log.warning("parser: telethon config error: %s", e)
-                # If config is missing for the picked account, we can't proceed meaningfully.
                 return ParseSummary(
                     channels_total=len(actionable_channels),
                     channels_checked=checked,
                     channels_skipped_no_account=0,
                     posts_inserted=inserted_total,
                 )
+            except errors.FloodError as e:
+                last_exc = e
+                if "FROZEN_METHOD_INVALID" in str(e):
+                    with SessionLocal() as db:
+                        db_acc = db.get(Account, acc.id)
+                        if db_acc:
+                            db_acc.status = AccountStatus.banned
+                            db_acc.is_active = False
+                            db_acc.last_error = f"Frozen: {e}"
+                            db_acc.updated_at = now
+                            db.commit()
+                    log.warning("parser: quarantined frozen account id=%s", acc.id)
+                    await notify_admin(
+                        f"⚠️ TG Parser: аккаунт заморожен (FROZEN_METHOD_INVALID). id={acc.id} phone={getattr(acc, 'phone_number', '') or ''}"
+                    )
+                continue
             except Exception as e:
-                with SessionLocal() as db:
-                    db_ch = db.get(Channel, ch.id)
-                    if db_ch:
-                        db_ch.last_error = f"{type(e).__name__}: {e}"
-                        db_ch.last_checked_at = now
-                        db.commit()
-                log.exception(
-                    "parser: channel failed (id=%s ident=%s)",
-                    ch.id,
-                    ch.identifier,
-                )
+                last_exc = e
+                continue
+
+        if not parsed:
+            with SessionLocal() as db:
+                db_ch = db.get(Channel, ch.id)
+                if db_ch:
+                    db_ch.last_error = (
+                        f"Resolve/access failed: {type(last_exc).__name__}: {last_exc}" if last_exc else "Resolve/access failed"
+                    )
+                    db_ch.last_checked_at = now
+                    db.commit()
+
+            log.warning(
+                "parser: no eligible account for channel (id=%s ref=%s last_err=%s)",
+                ch.id,
+                entity_ref,
+                f"{type(last_exc).__name__}: {last_exc}" if last_exc else "<none>",
+            )
+            continue
 
     return ParseSummary(
         channels_total=len(actionable_channels),
