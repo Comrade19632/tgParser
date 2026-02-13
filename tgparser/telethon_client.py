@@ -7,7 +7,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from .models import Account
-from .telethon.account_service import TelethonConfigError, _require_telethon_config
+from .telethon.account_service import TelethonConfigError, _require_account_telethon_config
 
 log = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ def build_client(*, account: Account) -> TelegramClient:
     IMPORTANT: The caller is responsible for connecting + disconnecting.
     """
 
-    api_id, api_hash = _require_telethon_config()
+    api_id, api_hash = _require_account_telethon_config(account)
 
     # StringSession('') is valid but will be unauthorized; keep explicit message elsewhere.
     sess = StringSession(account.session_string or "")

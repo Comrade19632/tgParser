@@ -14,8 +14,7 @@ class Settings(BaseSettings):
     tick_interval_seconds: int = 3600
     default_backfill_days: int = 0
 
-    telethon_api_id: int | None = None
-    telethon_api_hash: str | None = None
+    # Telethon API credentials are stored per-account in DB (not in env).
 
 
 settings = Settings()

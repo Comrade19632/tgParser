@@ -45,6 +45,10 @@ class Account(Base):
     # Telethon session: prefer StringSession stored in DB
     session_string: Mapped[str] = mapped_column(Text, default="")
 
+    # Telethon API credentials (per account, like tgreact)
+    api_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    api_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 

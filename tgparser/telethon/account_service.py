@@ -7,8 +7,10 @@ from datetime import datetime, timedelta, timezone
 from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 
-from ..models import AccountStatus
-from ..settings import settings
+from sqlalchemy import select
+
+from ..db import SessionLocal
+from ..models import Account, AccountStatus
 from .session_storage import SessionStorage
 
 log = logging.getLogger(__name__)
@@ -18,13 +20,13 @@ class TelethonConfigError(RuntimeError):
     pass
 
 
-def _require_telethon_config() -> tuple[int, str]:
-    if not settings.telethon_api_id or not settings.telethon_api_hash:
+def _require_account_telethon_config(acc: Account) -> tuple[int, str]:
+    if not acc.api_id or not acc.api_hash:
         raise TelethonConfigError(
-            "Telethon credentials are not configured. "
-            "Set TELETHON_API_ID and TELETHON_API_HASH in .env"
+            "Telethon credentials are not configured for this account. "
+            "Expected accounts.api_id and accounts.api_hash to be set (stored in DB)."
         )
-    return int(settings.telethon_api_id), str(settings.telethon_api_hash)
+    return int(acc.api_id), str(acc.api_hash)
 
 
 @dataclass(frozen=True)
@@ -54,7 +56,12 @@ class TelethonAccountService:
         if not sess_str:
             return AccountHealth(status=AccountStatus.auth_required, last_error="Missing session_string")
 
-        api_id, api_hash = _require_telethon_config()
+        with SessionLocal() as db:
+            acc = db.execute(select(Account).where(Account.id == account_id)).scalar_one_or_none()
+            if not acc:
+                return AccountHealth(status=AccountStatus.error, last_error=f"Account not found: {account_id}")
+
+        api_id, api_hash = _require_account_telethon_config(acc)
 
         # Local import to keep worker start resilient if Telethon isn't installed.
         from telethon import TelegramClient
