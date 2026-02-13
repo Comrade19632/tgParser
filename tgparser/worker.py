@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import secrets
 
@@ -228,8 +228,8 @@ async def tick(r: redis.Redis, *, tick_id: int) -> None:
 
     # Parser engine (v1): incremental fetch + persist + dedupe.
     parse_summary = await parse_new_posts_once()
-    summary = TickSummary(
-        **summary.__dict__,
+    summary = replace(
+        summary,
         channels_checked=parse_summary.channels_checked,
         channels_total=parse_summary.channels_total,
         posts_inserted=parse_summary.posts_inserted,
