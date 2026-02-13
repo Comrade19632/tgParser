@@ -145,6 +145,10 @@ async def _update_accounts_status() -> TickSummary:
                 acc.status = health.status
                 acc.last_error = health.last_error
                 acc.cooldown_until = health.cooldown_until
+
+                # If Telegram freezes/bans the account, quarantine it automatically.
+                if health.status == AccountStatus.banned:
+                    acc.is_active = False
             except TelethonConfigError as e:
                 # Config issue is global; no point iterating further.
                 log.warning("telethon: config error: %s", e)
