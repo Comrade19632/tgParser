@@ -13,6 +13,7 @@ class AccountStatus(str, enum.Enum):
     active = "active"
     cooldown = "cooldown"
     banned = "banned"
+    forbidden = "forbidden"  # quarantined by policy (e.g. deactivated/restricted)
     auth_required = "auth_required"
     error = "error"
 

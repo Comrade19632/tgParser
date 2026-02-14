@@ -46,6 +46,25 @@ def _mark_account_cooldown(*, account_id: int, seconds: int, note: str, now: dat
         db.commit()
 
 
+def _quarantine_account(*, account_id: int, status: AccountStatus, note: str, now: datetime) -> None:
+    """Quarantine account so selector stops picking it.
+
+    Policy: set status to banned/forbidden and soft-disable is_active.
+    """
+
+    with SessionLocal() as db:
+        acc = db.get(Account, account_id)
+        if not acc:
+            return
+
+        acc.status = status
+        acc.is_active = False
+        acc.cooldown_until = None
+        acc.last_error = (note or "")[:5000]
+        acc.updated_at = now
+        db.commit()
+
+
 @dataclass(frozen=True)
 class ParseSummary:
     channels_total: int = 0
@@ -379,18 +398,63 @@ async def parse_new_posts_once() -> ParseSummary:
 
                 log.warning("parser: floodwait account_id=%s seconds=%s", acc.id, seconds)
                 continue
+            except (
+                errors.PhoneNumberBannedError,
+                errors.UserDeactivatedBanError,
+            ) as e:
+                # Account-level ban. Quarantine account and continue with others.
+                last_exc = e
+                exclude.add(acc.id)
+                _quarantine_account(account_id=acc.id, status=AccountStatus.banned, note=f"Banned: {e}", now=now)
+                log.warning("parser: quarantined banned account id=%s", acc.id)
+                msg = (
+                    f"⚠️ TG Parser: аккаунт забанен/деактивирован. id={acc.id} phone={getattr(acc, 'phone_number', '') or ''} err={type(e).__name__}"
+                )
+                await notify_admin(msg)
+                await notify_team(msg)
+                continue
+            except (
+                errors.UserDeactivatedError,
+            ) as e:
+                # Restricted/forbidden account state (soft quarantine).
+                last_exc = e
+                exclude.add(acc.id)
+                _quarantine_account(account_id=acc.id, status=AccountStatus.forbidden, note=f"Forbidden: {e}", now=now)
+                log.warning("parser: quarantined forbidden account id=%s", acc.id)
+                msg = (
+                    f"⚠️ TG Parser: аккаунт ограничен (forbidden). id={acc.id} phone={getattr(acc, 'phone_number', '') or ''}"
+                )
+                await notify_admin(msg)
+                await notify_team(msg)
+                continue
+            except (
+                errors.ChannelPrivateError,
+                errors.ChatAdminRequiredError,
+                errors.UserBannedInChannelError,
+                errors.UserNotParticipantError,
+                errors.ChatWriteForbiddenError,
+            ) as e:
+                # Channel-level forbidden for this account; mark membership forbidden and try other accounts.
+                last_exc = e
+                exclude.add(acc.id)
+                upsert_membership(
+                    account_id=acc.id,
+                    channel_id=ch.id,
+                    status=AccountChannelStatus.forbidden,
+                    note=f"forbidden: {type(e).__name__}: {e}",
+                    now=now,
+                )
+                continue
             except errors.FloodError as e:
                 last_exc = e
                 exclude.add(acc.id)
                 if "FROZEN_METHOD_INVALID" in str(e):
-                    with SessionLocal() as db:
-                        db_acc = db.get(Account, acc.id)
-                        if db_acc:
-                            db_acc.status = AccountStatus.banned
-                            db_acc.is_active = False
-                            db_acc.last_error = f"Frozen: {e}"
-                            db_acc.updated_at = now
-                            db.commit()
+                    _quarantine_account(
+                        account_id=acc.id,
+                        status=AccountStatus.banned,
+                        note=f"Frozen: {e}",
+                        now=now,
+                    )
                     log.warning("parser: quarantined frozen account id=%s", acc.id)
                     msg = (
                         f"⚠️ TG Parser: аккаунт заморожен (FROZEN_METHOD_INVALID). id={acc.id} phone={getattr(acc, 'phone_number', '') or ''}"
@@ -404,9 +468,20 @@ async def parse_new_posts_once() -> ParseSummary:
                 continue
 
         if not parsed:
+            forbidden_exc_types = (
+                errors.ChannelPrivateError,
+                errors.ChatAdminRequiredError,
+                errors.UserBannedInChannelError,
+                errors.UserNotParticipantError,
+                errors.ChatWriteForbiddenError,
+            )
+
             with SessionLocal() as db:
                 db_ch = db.get(Channel, ch.id)
                 if db_ch:
+                    if isinstance(last_exc, forbidden_exc_types):
+                        db_ch.access_status = ChannelAccessStatus.forbidden
+
                     db_ch.last_error = (
                         f"Resolve/access failed: {type(last_exc).__name__}: {last_exc}" if last_exc else "Resolve/access failed"
                     )
