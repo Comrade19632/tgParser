@@ -126,7 +126,38 @@ async def acc_reauth_phone_start(q: CallbackQuery, state: FSMContext) -> None:
         return
 
     profile = generate_device_profile(app_version="5.8.3 x64")
-    await state.update_data(profile=profile.__dict__, proxy_url=None, reauth_account_id=account_id)
+
+    # Try to reuse phone/proxy from previous authorization.
+    with SessionLocal() as db:
+        acc = db.get(Account, account_id)
+        phone_number = (acc.phone_number or "").strip() if acc else ""
+        proxy_url = (acc.proxy_url or "").strip() if acc else ""
+
+    await state.update_data(profile=profile.__dict__, proxy_url=(proxy_url or None), reauth_account_id=account_id)
+
+    # Fast path: if we have phone number, immediately send code using stored proxy (if any).
+    if phone_number:
+        try:
+            start_info = await phone_code_start(
+                phone_number=phone_number,
+                profile=profile,
+                proxy_url=(proxy_url or None),
+            )
+            await state.update_data(
+                phone_number=phone_number,
+                session_string=start_info["session_string"],
+                phone_code_hash=start_info["phone_code_hash"],
+            )
+            if q.message:
+                await q.message.answer(
+                    f"Переавторизация аккаунта #{account_id} (по коду).\n\n"
+                    "Код отправлен. Пришлите код входа.\n/cancel — отмена."
+                )
+            await state.set_state(PhoneCodeFlow.code)
+            return
+        except Exception:
+            # Fallback: ask for proxy/phone manually.
+            pass
 
     if q.message:
         await q.message.answer(
@@ -218,6 +249,7 @@ async def acc_add_phone_code(m: Message, state: FSMContext) -> None:
         api_id=profile.api_id,
         api_hash=profile.api_hash,
         session_string=session_string,
+        proxy_url=data.get("proxy_url"),
         reauth_account_id=data.get("reauth_account_id"),
     )
 
@@ -254,6 +286,7 @@ async def acc_add_phone_two_fa(m: Message, state: FSMContext) -> None:
         api_id=profile.api_id,
         api_hash=profile.api_hash,
         session_string=session_string,
+        proxy_url=data.get("proxy_url"),
         reauth_account_id=data.get("reauth_account_id"),
     )
 
@@ -292,28 +325,34 @@ async def acc_reauth_tdata_start(q: CallbackQuery, state: FSMContext) -> None:
         return
 
     profile = generate_device_profile(app_version="5.8.3 x64")
-    await state.update_data(profile=profile.__dict__, proxy_url=None, two_fa=None, reauth_account_id=account_id)
 
+    with SessionLocal() as db:
+        acc = db.get(Account, account_id)
+        proxy_url = (acc.proxy_url or "").strip() if acc else ""
+
+    await state.update_data(profile=profile.__dict__, proxy_url=(proxy_url or None), two_fa=None, reauth_account_id=account_id)
+
+    # For tdata flow we still need upload, but we can skip asking proxy again.
     if q.message:
         await q.message.answer(
             f"Переавторизация аккаунта #{account_id} (через tdata).\n\n"
-            "Пришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+            "Если нужен пароль 2FA — пришлите его сейчас, или /skip чтобы продолжить без 2FA.\n/cancel — отмена."
         )
 
-    await state.set_state(TdataFlow.proxy)
+    await state.set_state(TdataFlow.two_fa)
 
 
 @router.message(TdataFlow.proxy, Command("skip"))
 async def acc_add_tdata_proxy_skip(m: Message, state: FSMContext) -> None:
     await state.update_data(proxy_url=None)
-    await m.answer("If account has 2FA, send password now; or /skip to continue without 2FA")
+    await m.answer("Если у аккаунта есть 2FA — пришлите пароль сейчас, или /skip чтобы продолжить без 2FA")
     await state.set_state(TdataFlow.two_fa)
 
 
 @router.message(TdataFlow.proxy, F.text)
 async def acc_add_tdata_proxy_set(m: Message, state: FSMContext) -> None:
     await state.update_data(proxy_url=(m.text or "").strip())
-    await m.answer("If account has 2FA, send password now; or /skip to continue without 2FA")
+    await m.answer("Если у аккаунта есть 2FA — пришлите пароль сейчас, или /skip чтобы продолжить без 2FA")
     await state.set_state(TdataFlow.two_fa)
 
 
@@ -394,6 +433,7 @@ async def acc_add_tdata_file(m: Message, state: FSMContext) -> None:
             api_id=profile.api_id,
             api_hash=profile.api_hash,
             session_string=session_string,
+            proxy_url=data.get("proxy_url"),
             reauth_account_id=data.get("reauth_account_id"),
         )
     except (TdataArchiveError, FileNotFoundError) as e:
@@ -432,6 +472,7 @@ async def _create_or_update_account(
     api_id: int,
     api_hash: str,
     session_string: str,
+    proxy_url: str | None = None,
     reauth_account_id: int | None = None,
 ) -> None:
     phone_number = (phone_number or "").strip()
@@ -456,6 +497,8 @@ async def _create_or_update_account(
             acc.session_string = session_string
             acc.api_id = api_id
             acc.api_hash = api_hash
+            if proxy_url is not None:
+                acc.proxy_url = proxy_url
             acc.last_error = ""
             acc.cooldown_until = None
             db.commit()
@@ -475,6 +518,7 @@ async def _create_or_update_account(
             phone_number=phone_number,
             onboarding_method=onboarding_method,
             is_active=True,
+            proxy_url=proxy_url or "",
             status=AccountStatus.active,
             session_string=session_string,
             api_id=api_id,
@@ -490,10 +534,17 @@ PAGE_SIZE = 6
 
 
 def _counts_prefix_accounts(*, db) -> str:
-    total = db.execute(select(Account.id)).all()
-    enabled = db.execute(select(Account.id).where(Account.is_active.is_(True))).all()
+    # Hide soft-removed accounts (Remove action): is_active=false + status=forbidden + cleared session.
+    not_removed = ~(
+        (Account.is_active.is_(False))
+        & (Account.status == AccountStatus.forbidden)
+        & (Account.session_string == "")
+    )
+
+    total = db.execute(select(Account.id).where(not_removed)).all()
+    enabled = db.execute(select(Account.id).where(not_removed, Account.is_active.is_(True))).all()
     usable = db.execute(
-        select(Account.id).where(Account.is_active.is_(True), Account.status == AccountStatus.active)
+        select(Account.id).where(not_removed, Account.is_active.is_(True), Account.status == AccountStatus.active)
     ).all()
 
     # Semantics:
@@ -557,6 +608,12 @@ async def _render_accounts_list(q: CallbackQuery, *, page: int) -> None:
 
     with SessionLocal() as db:
         accounts_all = list(db.execute(select(Account).order_by(Account.id.asc())).scalars())
+        # Hide soft-removed accounts (Remove action): is_active=false + status=forbidden + cleared session.
+        accounts_all = [
+            a
+            for a in accounts_all
+            if not (not a.is_active and a.status == AccountStatus.forbidden and (a.session_string or "") == "")
+        ]
 
         if not accounts_all:
             if q.message:

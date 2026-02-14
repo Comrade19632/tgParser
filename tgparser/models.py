@@ -55,6 +55,9 @@ class Account(Base):
     # Soft-disable flag for operator control.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Last used proxy for onboarding (optional). Used to prefill re-auth.
+    proxy_url: Mapped[str] = mapped_column(Text, default="")
+
     status: Mapped[AccountStatus] = mapped_column(Enum(AccountStatus), default=AccountStatus.active)
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
