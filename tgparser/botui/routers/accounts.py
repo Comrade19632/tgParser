@@ -38,7 +38,7 @@ def accounts_actions_kb() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     kb.button(text="Добавить (код)", callback_data=cb.ACC_ADD_PHONE)
     kb.button(text="Добавить (tdata)", callback_data=cb.ACC_ADD_TDATA)
-    kb.button(text="Список", callback_data=cb.ACC_LIST)
+    kb.button(text="Список", callback_data=f"{cb.ACC_LIST}:0")
     kb.adjust(2, 1)
     kb.button(text="← Назад", callback_data=cb.MAIN)
     kb.button(text="Обновить", callback_data=cb.ACCOUNTS)
@@ -46,11 +46,11 @@ def accounts_actions_kb() -> InlineKeyboardBuilder:
     return kb
 
 
-def account_row_kb(*, account_id: int, is_active: bool) -> InlineKeyboardBuilder:
+def account_row_kb(*, account_id: int, is_active: bool, page: int = 0) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
-    if is_active:
-        kb.button(text="Disable", callback_data=f"{cb.ACC_DISABLE}:{account_id}")
-    kb.button(text="Remove", callback_data=f"{cb.ACC_REMOVE}:{account_id}")
+    action = "Disable" if is_active else "Enable"
+    kb.button(text=action, callback_data=f"{cb.ACC_TOGGLE}:{account_id}:{page}")
+    kb.button(text="Remove", callback_data=f"{cb.ACC_REMOVE}:{account_id}:{page}")
     kb.adjust(2)
     return kb
 
@@ -75,9 +75,13 @@ class FlowProfile:
 
 
 async def _render_accounts_menu(q: CallbackQuery) -> None:
+    prefix = ""
+    with SessionLocal() as db:
+        prefix = _counts_prefix_accounts(db=db)
+
     if q.message:
         await q.message.edit_text(
-            "Аккаунты\n\nВыберите действие:",
+            "Аккаунты\n\n" + prefix + "Выберите действие:",
             reply_markup=accounts_actions_kb().as_markup(),
         )
 
@@ -399,88 +403,225 @@ async def _create_account(
     await m.answer(f"Account added: {label}")
 
 
-@router.callback_query(lambda q: q.data == cb.ACC_LIST)
-async def acc_list(q: CallbackQuery) -> None:
-    await q.answer()
+PAGE_SIZE = 6
 
-    # Optionally refresh statuses (best-effort)
+
+def _counts_prefix_accounts(*, db) -> str:
+    total = db.execute(select(Account.id)).all()
+    active = db.execute(select(Account.id).where(Account.is_active.is_(True))).all()
+    return f"Active/Total: {len(active)}/{len(total)}\n\n"
+
+
+def _accounts_list_kb(*, accounts: list[Account], page: int, total_pages: int) -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+
+    for a in accounts:
+        icon = "✅" if a.is_active else "⛔"
+        label = (a.label or a.phone_number or f"acc#{a.id}").strip()
+        text = f"{icon} #{a.id} {label}"
+        kb.button(text=text[:64], callback_data=f"{cb.ACC_VIEW}:{a.id}:{page}")
+
+    kb.adjust(1)
+
+    prev_page = max(0, page - 1)
+    next_page = min(total_pages - 1, page + 1)
+
+    kb.button(text="◀ Prev", callback_data=f"{cb.ACC_LIST}:{prev_page}")
+    kb.button(text=f"{page + 1}/{total_pages}", callback_data="noop")
+    kb.button(text="Next ▶", callback_data=f"{cb.ACC_LIST}:{next_page}")
+    kb.adjust(3)
+
+    kb.button(text="← Аккаунты", callback_data=cb.ACCOUNTS)
+    kb.button(text="Обновить", callback_data=f"{cb.ACC_LIST}:{page}")
+    kb.adjust(2)
+
+    return kb
+
+
+def _account_detail_kb(*, account_id: int, is_active: bool, page: int) -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+    action = "Disable" if is_active else "Enable"
+    kb.button(text=action, callback_data=f"{cb.ACC_TOGGLE}:{account_id}:{page}")
+    kb.button(text="Remove", callback_data=f"{cb.ACC_REMOVE}:{account_id}:{page}")
+    kb.adjust(2)
+
+    kb.button(text="← Back to list", callback_data=f"{cb.ACC_LIST}:{page}")
+    kb.adjust(1)
+    return kb
+
+
+async def _render_accounts_list(q: CallbackQuery, *, page: int) -> None:
+    page = max(0, page)
+
+    # Optionally refresh statuses (best-effort) for ACTIVE accounts.
     service = TelethonAccountService(session_storage=DbSessionStorage())
 
     with SessionLocal() as db:
-        accounts = list(db.execute(select(Account).order_by(Account.id.asc())).scalars())
+        accounts_all = list(db.execute(select(Account).order_by(Account.id.asc())).scalars())
 
-        if not accounts:
+        if not accounts_all:
             if q.message:
-                await q.message.answer("No accounts yet.")
+                await q.message.edit_text(
+                    "Аккаунты\n\nПока нет аккаунтов.",
+                    reply_markup=accounts_actions_kb().as_markup(),
+                )
             return
 
-        lines: list[str] = []
-        for acc in accounts:
-            status = acc.status
-            last_error = (acc.last_error or "").strip()
-
-            if acc.is_active:
-                try:
-                    health = await service.check(account_id=acc.id)
-                    acc.status = health.status
-                    acc.last_error = health.last_error
-                    acc.cooldown_until = health.cooldown_until
-                    status = health.status
-                    last_error = (health.last_error or "").strip()
-                except Exception as e:
-                    acc.status = AccountStatus.error
-                    acc.last_error = f"{type(e).__name__}: {e}"
-                    status = acc.status
-                    last_error = acc.last_error
-
-            active_flag = "active" if acc.is_active else "disabled"
-            label = acc.label or acc.phone_number or f"acc#{acc.id}"
-            tail = f" — {last_error}" if last_error else ""
-            lines.append(f"#{acc.id} [{active_flag}] {label} — {status}{tail}")
+        # Best-effort health refresh for active accounts (so list is truthful).
+        for acc in accounts_all:
+            if not acc.is_active:
+                continue
+            try:
+                health = await service.check(account_id=acc.id)
+                acc.status = health.status
+                acc.last_error = health.last_error
+                acc.cooldown_until = health.cooldown_until
+            except Exception as e:
+                acc.status = AccountStatus.error
+                acc.last_error = f"{type(e).__name__}: {e}"
 
         db.commit()
 
+        total_pages = max(1, (len(accounts_all) + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = min(page, total_pages - 1)
+        start = page * PAGE_SIZE
+        end = start + PAGE_SIZE
+        page_items = accounts_all[start:end]
+
+        lines: list[str] = []
+        for acc in page_items:
+            active_flag = "active" if acc.is_active else "disabled"
+            label = (acc.label or acc.phone_number or f"acc#{acc.id}").strip()
+            status = acc.status.value if hasattr(acc.status, "value") else str(acc.status)
+            last_error = (acc.last_error or "").strip()
+            tail = f"\n    err: {last_error}" if last_error else ""
+            lines.append(f"#{acc.id} [{active_flag}] {label}\n    status={status}{tail}")
+
+        prefix = _counts_prefix_accounts(db=db)
+
+    text = "Аккаунты\n\n" + prefix + "\n\n".join(lines)
+
     if q.message:
-        await q.message.answer("Accounts:\n" + "\n".join(lines))
+        await q.message.edit_text(
+            text,
+            reply_markup=_accounts_list_kb(accounts=page_items, page=page, total_pages=total_pages).as_markup(),
+        )
 
 
-@router.callback_query(F.data.startswith(f"{cb.ACC_DISABLE}:"))
-async def acc_disable(q: CallbackQuery) -> None:
+@router.callback_query(lambda q: (q.data or "") == cb.ACC_LIST or (q.data or "").startswith(f"{cb.ACC_LIST}:"))
+async def acc_list(q: CallbackQuery) -> None:
     await q.answer()
+
+    data = (q.data or "").strip()
+    page = 0
+    if data.startswith(f"{cb.ACC_LIST}:"):
+        try:
+            page = int(data.split(":", 1)[1])
+        except Exception:
+            page = 0
+
+    await _render_accounts_list(q, page=page)
+
+
+@router.callback_query(F.data.startswith(f"{cb.ACC_VIEW}:"))
+async def acc_view(q: CallbackQuery) -> None:
+    await q.answer()
+
+    data = (q.data or "")
     try:
-        account_id = int((q.data or "").split(":", 2)[2])
+        _, _, account_id_s, page_s = data.split(":", 3)
+        account_id = int(account_id_s)
+        page = int(page_s)
+    except Exception:
+        await q.answer("Bad callback", show_alert=False)
+        return
+
+    # Refresh single account status (best-effort) to show real info.
+    service = TelethonAccountService(session_storage=DbSessionStorage())
+
+    with SessionLocal() as db:
+        acc = db.get(Account, account_id)
+        if not acc:
+            await q.answer("Account not found", show_alert=False)
+            return
+
+        if acc.is_active:
+            try:
+                health = await service.check(account_id=acc.id)
+                acc.status = health.status
+                acc.last_error = health.last_error
+                acc.cooldown_until = health.cooldown_until
+            except Exception as e:
+                acc.status = AccountStatus.error
+                acc.last_error = f"{type(e).__name__}: {e}"
+
+        db.commit()
+
+        label = (acc.label or acc.phone_number or f"acc#{acc.id}").strip()
+        active_flag = "active" if acc.is_active else "disabled"
+        status = acc.status.value if hasattr(acc.status, "value") else str(acc.status)
+        last_error = (acc.last_error or "").strip()
+        cooldown = acc.cooldown_until.isoformat() if getattr(acc, "cooldown_until", None) else "—"
+
+    text = (
+        f"Аккаунт #{account_id}\n\n"
+        f"{label}\n"
+        f"state={active_flag} status={status}\n"
+        f"cooldown_until={cooldown}\n\n"
+        f"last_error: {last_error if last_error else '—'}"
+    )
+
+    if q.message:
+        await q.message.edit_text(
+            text,
+            reply_markup=_account_detail_kb(account_id=account_id, is_active=(active_flag == 'active'), page=page).as_markup(),
+        )
+
+
+@router.callback_query(F.data.startswith(f"{cb.ACC_TOGGLE}:"))
+async def acc_toggle(q: CallbackQuery) -> None:
+    await q.answer()
+
+    data = (q.data or "")
+    try:
+        _, _, account_id_s, page_s = data.split(":", 3)
+        account_id = int(account_id_s)
+        page = int(page_s)
     except Exception:
         return
 
     with SessionLocal() as db:
         acc = db.get(Account, account_id)
         if not acc:
-            if q.message:
-                await q.message.answer("Account not found")
+            await q.answer("Account not found", show_alert=False)
             return
-        acc.is_active = False
+        acc.is_active = not acc.is_active
         db.commit()
+        new_state = "enabled" if acc.is_active else "disabled"
 
-    if q.message:
-        await q.message.answer(f"Account #{account_id} disabled")
+    await q.answer(f"Account {new_state}")
+    await _render_accounts_list(q, page=page)
 
 
 @router.callback_query(F.data.startswith(f"{cb.ACC_REMOVE}:"))
 async def acc_remove(q: CallbackQuery) -> None:
     await q.answer()
+
+    data = (q.data or "")
     try:
-        account_id = int((q.data or "").split(":", 2)[2])
+        _, _, account_id_s, page_s = data.split(":", 3)
+        account_id = int(account_id_s)
+        page = int(page_s)
     except Exception:
         return
 
     with SessionLocal() as db:
         acc = db.get(Account, account_id)
         if not acc:
-            if q.message:
-                await q.message.answer("Account not found")
+            await q.answer("Account not found", show_alert=False)
             return
         db.delete(acc)
         db.commit()
 
-    if q.message:
-        await q.message.answer(f"Account #{account_id} removed")
+    await q.answer(f"Account #{account_id} removed")
+    await _render_accounts_list(q, page=page)

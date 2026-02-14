@@ -94,21 +94,23 @@ async def _errors_body() -> str:
             ).scalars()
         )
 
+    if not accs and not chs:
+        return "Ошибок нет."
+
     lines: list[str] = []
 
-    lines.append("Ошибки аккаунтов:")
-    if not accs:
-        lines.append("- (none)")
-    else:
+    if accs:
+        lines.append("Ошибки аккаунтов:")
         for a in accs:
             ident = a.label or a.phone_number or f"id={a.id}"
-            lines.append(f"- #{a.id} {ident} status={a.status.value} updated={a.updated_at.isoformat()} err={_short_err(a.last_error)}")
+            lines.append(
+                f"- #{a.id} {ident} status={a.status.value} updated={a.updated_at.isoformat()} err={_short_err(a.last_error)}"
+            )
 
-    lines.append("")
-    lines.append("Ошибки каналов:")
-    if not chs:
-        lines.append("- (none)")
-    else:
+    if chs:
+        if lines:
+            lines.append("")
+        lines.append("Ошибки каналов:")
         for c in chs:
             when = c.last_checked_at.isoformat() if c.last_checked_at else "?"
             lines.append(

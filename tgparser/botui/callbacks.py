@@ -9,9 +9,10 @@ ERRORS = "menu:errors"
 # Accounts actions
 ACC_ADD_PHONE = "accounts:add:phone"
 ACC_ADD_TDATA = "accounts:add:tdata"
-ACC_LIST = "accounts:list"
-ACC_DISABLE = "accounts:disable"  # prefix: accounts:disable:<id>
-ACC_REMOVE = "accounts:remove"  # prefix: accounts:remove:<id>
+ACC_LIST = "accounts:list"  # exact or prefix: accounts:list:<page>
+ACC_VIEW = "accounts:view"  # prefix: accounts:view:<id>:<page>
+ACC_TOGGLE = "accounts:toggle"  # prefix: accounts:toggle:<id>:<page>
+ACC_REMOVE = "accounts:remove"  # prefix: accounts:remove:<id>:<page>
 
 # Channels actions
 CH_ADD_PUBLIC = "channels:add:public"
