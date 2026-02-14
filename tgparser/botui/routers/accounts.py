@@ -117,8 +117,10 @@ async def acc_reauth_phone_start(q: CallbackQuery, state: FSMContext) -> None:
 
     data = (q.data or "")
     try:
-        _, _, account_id_s, _page_s = data.split(":", 3)
-        account_id = int(account_id_s)
+        # callback format: "accounts:reauth:phone:<account_id>:<page>" (prefix contains ":")
+        parts = data.split(":")
+        account_id = int(parts[-2])
+        _page = int(parts[-1])
     except Exception:
         await q.answer("Bad callback", show_alert=False)
         return
@@ -281,8 +283,10 @@ async def acc_reauth_tdata_start(q: CallbackQuery, state: FSMContext) -> None:
 
     data = (q.data or "")
     try:
-        _, _, account_id_s, _page_s = data.split(":", 3)
-        account_id = int(account_id_s)
+        # callback format: "accounts:reauth:tdata:<account_id>:<page>" (prefix contains ":")
+        parts = data.split(":")
+        account_id = int(parts[-2])
+        _page = int(parts[-1])
     except Exception:
         await q.answer("Bad callback", show_alert=False)
         return
