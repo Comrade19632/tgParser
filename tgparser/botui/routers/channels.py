@@ -13,7 +13,15 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
 from ...db import SessionLocal
-from ...models import Channel, ChannelType
+from ...models import Channel, ChannelAccessStatus, ChannelType
+from ...telethon.dialogs import get_entity_from_dialogs
+from ...telethon.join_service import ensure_joined
+from ...telethon.pool import TelethonClientPool
+from ...telethon.selector import (
+    AccountChannelStatus,
+    pick_account_for_channel,
+    upsert_membership,
+)
 from .. import callbacks as cb
 
 log = logging.getLogger(__name__)
@@ -93,6 +101,97 @@ def normalize_invite(text: str) -> str | None:
         return t
 
     return None
+
+
+async def _attempt_join_on_add(*, channel_id: int) -> str:
+    """Best-effort: try to join channel right after adding it.
+
+    This is especially important for private invite links (join request / pending approval).
+    """
+
+    with SessionLocal() as db:
+        ch = db.get(Channel, channel_id)
+        if not ch:
+            return "(join: channel not found)"
+
+    pick = pick_account_for_channel(ch=ch)
+    acc = pick.account
+    if acc is None:
+        return "(join: no ready accounts; add/authorize a userbot account first)"
+
+    pool = TelethonClientPool()
+    try:
+        async with pool.connected(account=acc) as client:
+            if not await client.is_user_authorized():
+                return f"(join: account #{acc.id} is not authorized)"
+
+            # First try dialogs (cheap). If present => already joined.
+            entity = await get_entity_from_dialogs(client=client, ch=ch)
+            if entity is not None:
+                upsert_membership(
+                    account_id=acc.id,
+                    channel_id=ch.id,
+                    status=AccountChannelStatus.joined,
+                    note="entity found in dialogs",
+                )
+                with SessionLocal() as db:
+                    ch2 = db.get(Channel, ch.id)
+                    if ch2 and ch2.access_status not in {ChannelAccessStatus.active, ChannelAccessStatus.joined}:
+                        ch2.access_status = ChannelAccessStatus.joined
+                        db.commit()
+                return f"(join: OK via dialogs; account #{acc.id})"
+
+            join_res = await ensure_joined(client=client, ch=ch)
+
+            # Persist membership + channel status.
+            if join_res.access_status == ChannelAccessStatus.joined:
+                upsert_membership(
+                    account_id=acc.id,
+                    channel_id=ch.id,
+                    status=AccountChannelStatus.joined,
+                    note=join_res.note,
+                )
+            elif join_res.access_status == ChannelAccessStatus.join_requested:
+                upsert_membership(
+                    account_id=acc.id,
+                    channel_id=ch.id,
+                    status=AccountChannelStatus.join_requested,
+                    note=join_res.note,
+                )
+            elif join_res.access_status == ChannelAccessStatus.pending_approval:
+                upsert_membership(
+                    account_id=acc.id,
+                    channel_id=ch.id,
+                    status=AccountChannelStatus.pending_approval,
+                    note=join_res.note,
+                )
+            elif join_res.access_status == ChannelAccessStatus.forbidden:
+                upsert_membership(
+                    account_id=acc.id,
+                    channel_id=ch.id,
+                    status=AccountChannelStatus.forbidden,
+                    note=join_res.note,
+                )
+            elif join_res.access_status == ChannelAccessStatus.error:
+                upsert_membership(
+                    account_id=acc.id,
+                    channel_id=ch.id,
+                    status=AccountChannelStatus.error,
+                    note=join_res.note,
+                )
+
+            with SessionLocal() as db:
+                ch2 = db.get(Channel, ch.id)
+                if ch2:
+                    if join_res.access_status is not None:
+                        ch2.access_status = join_res.access_status
+                    ch2.last_error = join_res.note if not join_res.ok else ""
+                    db.commit()
+
+            return f"(join: {join_res.access_status.value if join_res.access_status else 'unknown'}; account #{acc.id}; note={join_res.note})"
+    except Exception as e:
+        log.exception("join-on-add failed")
+        return f"(join: error {type(e).__name__})"
 
 
 async def _render_channels_menu(q: CallbackQuery) -> None:
@@ -203,7 +302,9 @@ async def ch_add_backfill(m: Message, state: FSMContext) -> None:
             existing.is_active = True
             existing.backfill_days = days
             db.commit()
-            await m.answer(f"Channel re-enabled: #{existing.id}")
+
+            note = await _attempt_join_on_add(channel_id=existing.id)
+            await m.answer(f"Channel re-enabled: #{existing.id} {note}")
             await state.clear()
             return
 
@@ -211,7 +312,8 @@ async def ch_add_backfill(m: Message, state: FSMContext) -> None:
         db.add(ch)
         db.commit()
 
-        await m.answer(f"Channel added: #{ch.id} ({ch_type.value}) {ident} backfill_days={days}")
+        note = await _attempt_join_on_add(channel_id=ch.id)
+        await m.answer(f"Channel added: #{ch.id} ({ch_type.value}) {ident} backfill_days={days} {note}")
 
     await state.clear()
 

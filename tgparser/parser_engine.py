@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from telethon import errors
 
 from .db import SessionLocal
-from .models import Account, AccountStatus, Channel, ChannelAccessStatus, Post
+from .models import Account, AccountChannelMembership, AccountStatus, Channel, ChannelAccessStatus, Post
 from .notify import notify_admin, notify_team
 from .telethon.account_service import TelethonConfigError
 from .telethon.dialogs import get_entity_from_dialogs
@@ -147,11 +147,37 @@ async def parse_new_posts_once() -> ParseSummary:
 
                     entity = await get_entity_from_dialogs(client=client, ch=db_ch)
 
+                    # If the entity is already visible in dialogs, treat this (account,channel)
+                    # as joined for selector purposes (e.g. after a private join request was approved).
+                    if entity is not None:
+                        upsert_membership(
+                            account_id=acc.id,
+                            channel_id=ch.id,
+                            status=AccountChannelStatus.joined,
+                            note="entity found in dialogs",
+                            now=now,
+                        )
+
                     # 2) If not found in dialogs, try to join (public: JoinChannel, private: ImportChatInvite).
+                    # Avoid spamming join requests: if we already requested/pending for this account,
+                    # do not call ImportChatInvite again.
                     if entity is None and db_ch.access_status not in {
                         ChannelAccessStatus.joined,
                         ChannelAccessStatus.active,
                     }:
+                        with SessionLocal() as db:
+                            m = db.execute(
+                                select(AccountChannelMembership.status).where(
+                                    AccountChannelMembership.account_id == acc.id,
+                                    AccountChannelMembership.channel_id == ch.id,
+                                )
+                            ).first()
+                            mem_status = m[0] if m else None
+
+                        if mem_status in {AccountChannelStatus.join_requested, AccountChannelStatus.pending_approval}:
+                            exclude.add(acc.id)
+                            continue
+
                         join_res = await ensure_joined(client=client, ch=db_ch)
 
                         # Track per-account membership state for selector.
@@ -160,6 +186,14 @@ async def parse_new_posts_once() -> ParseSummary:
                                 account_id=acc.id,
                                 channel_id=ch.id,
                                 status=AccountChannelStatus.joined,
+                                note=join_res.note,
+                                now=now,
+                            )
+                        elif join_res.access_status == ChannelAccessStatus.join_requested:
+                            upsert_membership(
+                                account_id=acc.id,
+                                channel_id=ch.id,
+                                status=AccountChannelStatus.join_requested,
                                 note=join_res.note,
                                 now=now,
                             )

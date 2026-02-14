@@ -110,11 +110,12 @@ async def ensure_joined(*, client, ch: Channel) -> EnsureJoinedResult:
                 access_status=ChannelAccessStatus.joined,
                 note="already participant",
             )
-        except getattr(errors, "InviteRequestSentError", ()):  # pending approval
+        except getattr(errors, "InviteRequestSentError", ()):  # join request sent, pending approval
+            # Telegram indicates the request was created; we should not spam ImportChatInvite.
             return EnsureJoinedResult(
                 ok=False,
                 entity=None,
-                access_status=ChannelAccessStatus.pending_approval,
+                access_status=ChannelAccessStatus.join_requested,
                 note="join request sent (pending approval)",
             )
 
