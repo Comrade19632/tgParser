@@ -9,7 +9,15 @@ from sqlalchemy.dialects.postgresql import insert
 from telethon import errors
 
 from .db import SessionLocal
-from .models import Account, AccountChannelMembership, AccountStatus, Channel, ChannelAccessStatus, Post
+from .models import (
+    Account,
+    AccountChannelMembership,
+    AccountStatus,
+    Channel,
+    ChannelAccessStatus,
+    ChannelType,
+    Post,
+)
 from .notify import notify_admin, notify_team
 from .telethon.account_service import TelethonConfigError
 from .telethon.dialogs import get_entity_from_dialogs
@@ -172,7 +180,12 @@ async def parse_new_posts_once() -> ParseSummary:
                             parsed = True
                             break
 
-                    entity = await get_entity_from_dialogs(client=client, ch=db_ch)
+                    # NOTE: get_dialogs is rate-limited aggressively. For public channels we
+                    # prefer direct username resolve first; dialogs lookup is mainly useful for
+                    # private channels where membership already exists.
+                    entity = None
+                    if db_ch.type != ChannelType.public:
+                        entity = await get_entity_from_dialogs(client=client, ch=db_ch)
 
                     # If the entity is already visible in dialogs, treat this (account,channel)
                     # as joined for selector purposes (e.g. after a private join request was approved).
@@ -185,12 +198,27 @@ async def parse_new_posts_once() -> ParseSummary:
                             now=now,
                         )
 
-                    # 2) If not found in dialogs, try to join (public: JoinChannel, private: ImportChatInvite).
+                    # 1.1) If not in dialogs, try to resolve entity directly.
+                    # For public channels this should work even without membership.
+                    if entity is None:
+                        try:
+                            if db_ch.type == ChannelType.public:
+                                ident = (db_ch.identifier or "").strip()
+                                if ident:
+                                    entity = await client.get_entity(ident)
+                            else:
+                                # Private: best-effort by numeric peer id if we have it.
+                                if isinstance(db_ch.peer_id, int) and db_ch.peer_id:
+                                    entity = await client.get_entity(int(db_ch.peer_id))
+                        except Exception:
+                            entity = None
+
+                    # 2) If still not found, try to join (public: JoinChannel, private: ImportChatInvite).
                     # Avoid spamming join requests: if we already requested/pending for this account,
                     # do not call ImportChatInvite again.
-                    if entity is None and db_ch.access_status not in {
+                    # NOTE: For v1 we only attempt joining for private channels.
+                    if entity is None and db_ch.type == ChannelType.private and db_ch.access_status not in {
                         ChannelAccessStatus.joined,
-                        ChannelAccessStatus.active,
                     }:
                         with SessionLocal() as db:
                             m = db.execute(
@@ -299,7 +327,9 @@ async def parse_new_posts_once() -> ParseSummary:
                                 entity = join_res.entity or await get_entity_from_dialogs(client=client, ch=db_ch)
 
                     if entity is None:
-                        # Not parsable for this account; continue to next account.
+                        # Not parsable for this account in this tick; exclude it so selector doesn't
+                        # re-pick the same account in a tight loop (common when there is only one).
+                        exclude.add(acc.id)
                         continue
 
                     # 3) Parse posts.
@@ -314,6 +344,17 @@ async def parse_new_posts_once() -> ParseSummary:
                             db_ch.access_status = ChannelAccessStatus.joined
 
                         cursor = int(db_ch.cursor_message_id or 0)
+
+                        # Safety: if cursor is set but DB has no posts yet (e.g. previous failed run
+                        # advanced cursor without inserts), treat as first-parse to avoid permanent
+                        # "0 inserted" loops.
+                        if cursor > 0:
+                            any_post = db.execute(
+                                select(Post.id).where(Post.channel_id == db_ch.id).limit(1)
+                            ).first()
+                            if not any_post:
+                                cursor = 0
+
                         max_seen_id = cursor
                         rows: list[dict] = []
 
