@@ -57,7 +57,8 @@ Upsert by `(type,identifier)`.
 ### GET /api/posts
 
 Query params:
-- `channel_id` OR `channel_identifier` (and optional `channel_type`)
+- Optional: `channel_id` OR `channel_identifier` (and optional `channel_type`).
+  If omitted, returns posts across **all channels**.
 - `date_from` / `date_to` (inclusive, ISO8601; if no TZ provided, treated as UTC)
 - `limit` (default 50, max 200)
 - `offset`
@@ -90,7 +91,14 @@ curl -s \
   http://<server-ip>:18081/api/channels | jq
 ```
 
-Export posts with date filters:
+Export all posts (all channels):
+```bash
+curl -s \
+  -H "Authorization: Bearer $TOKEN" \
+  "http://<server-ip>:18081/api/posts?limit=200&offset=0" | jq
+```
+
+Export posts with date filters (single channel):
 ```bash
 curl -s \
   -H "Authorization: Bearer $TOKEN" \

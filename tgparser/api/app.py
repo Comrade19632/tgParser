@@ -171,55 +171,54 @@ def list_posts(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    if channel_id is None and not channel_identifier:
-        raise HTTPException(status_code=400, detail="channel_id_or_channel_identifier_required")
-
     dt_from = _parse_dt(date_from, field="date_from")
     dt_to = _parse_dt(date_to, field="date_to")
 
-    ch_stmt = select(Channel)
-    if channel_id is not None:
-        ch_stmt = ch_stmt.where(Channel.id == channel_id)
-    else:
-        ch_stmt = ch_stmt.where(Channel.identifier == channel_identifier)
-        if channel_type:
-            try:
-                ctype = ChannelType(channel_type)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail={"channel_type": "invalid"}) from e
-            ch_stmt = ch_stmt.where(Channel.type == ctype)
+    # Channel filter is optional. If omitted, export posts across all channels.
+    channel: Channel | None = None
+    if channel_id is not None or channel_identifier:
+        ch_stmt = select(Channel)
+        if channel_id is not None:
+            ch_stmt = ch_stmt.where(Channel.id == channel_id)
+        else:
+            ch_stmt = ch_stmt.where(Channel.identifier == channel_identifier)
+            if channel_type:
+                try:
+                    ctype = ChannelType(channel_type)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail={"channel_type": "invalid"}) from e
+                ch_stmt = ch_stmt.where(Channel.type == ctype)
 
-    channel = db.execute(ch_stmt).scalar_one_or_none()
-    if channel is None:
-        raise HTTPException(status_code=404, detail="channel_not_found")
+        channel = db.execute(ch_stmt).scalar_one_or_none()
+        if channel is None:
+            raise HTTPException(status_code=404, detail="channel_not_found")
 
-    stmt = select(Post).where(Post.channel_id == channel.id)
+    stmt = select(Post, Channel).join(Channel, Channel.id == Post.channel_id)
+    if channel is not None:
+        stmt = stmt.where(Post.channel_id == channel.id)
     if dt_from is not None:
         stmt = stmt.where(Post.published_at >= dt_from)
     if dt_to is not None:
         stmt = stmt.where(Post.published_at <= dt_to)
 
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
-    posts = db.execute(stmt.order_by(Post.published_at.desc()).limit(limit).offset(offset)).scalars().all()
+    rows = db.execute(stmt.order_by(Post.published_at.desc()).limit(limit).offset(offset)).all()
 
-    ch_out = ChannelOut(
-        id=channel.id,
-        type=channel.type.value,
-        identifier=channel.identifier,
-        title=channel.title,
-        is_active=channel.is_active,
-        access_status=channel.access_status.value,
-        backfill_days=channel.backfill_days,
-        peer_id=channel.peer_id,
-        last_checked_at=channel.last_checked_at,
-        last_error=channel.last_error,
-    )
-
-    return {
-        "total": int(total),
-        "limit": limit,
-        "offset": offset,
-        "items": [
+    items: list[PostOut] = []
+    for p, ch in rows:
+        ch_out = ChannelOut(
+            id=ch.id,
+            type=ch.type.value,
+            identifier=ch.identifier,
+            title=ch.title,
+            is_active=ch.is_active,
+            access_status=ch.access_status.value,
+            backfill_days=ch.backfill_days,
+            peer_id=ch.peer_id,
+            last_checked_at=ch.last_checked_at,
+            last_error=ch.last_error,
+        )
+        items.append(
             PostOut(
                 id=p.id,
                 channel=ch_out,
@@ -227,6 +226,6 @@ def list_posts(
                 published_at=p.published_at,
                 text=p.text,
             )
-            for p in posts
-        ],
-    }
+        )
+
+    return {"total": int(total), "limit": limit, "offset": offset, "items": items}
