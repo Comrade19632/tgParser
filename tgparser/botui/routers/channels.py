@@ -399,7 +399,8 @@ async def ch_list(q: CallbackQuery) -> None:
     page = 0
     if data.startswith(f"{cb.CH_LIST}:"):
         try:
-            page = int(data.split(":", 1)[1])
+            # cb.CH_LIST itself contains ':' (e.g. "channels:list"), so page is after the LAST ':'
+            page = int(data.rsplit(":", 1)[1])
         except Exception:
             page = 0
 

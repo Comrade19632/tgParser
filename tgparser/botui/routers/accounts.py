@@ -516,7 +516,8 @@ async def acc_list(q: CallbackQuery) -> None:
     page = 0
     if data.startswith(f"{cb.ACC_LIST}:"):
         try:
-            page = int(data.split(":", 1)[1])
+            # cb.ACC_LIST itself contains ':' (e.g. "accounts:list"), so page is after the LAST ':'
+            page = int(data.rsplit(":", 1)[1])
         except Exception:
             page = 0
 

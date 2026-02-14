@@ -51,18 +51,49 @@ def main() -> None:
         default=[],
         help="Private invite: https://t.me/+HASH or raw HASH",
     )
+    p.add_argument(
+        "--demo",
+        action="store_true",
+        help=(
+            "Seed a curated set of known public channels for pagination/UI testing. "
+            "(Adds to any explicitly provided --public/--private.)"
+        ),
+    )
     p.add_argument("--backfill-days", type=int, default=0, help="Backfill days for all added channels")
     args = p.parse_args()
 
+    demo_public = [
+        "@durov",
+        "@telegram",
+        "@telegramtips",
+        "@telegramnews",
+        "@tgbeta",
+        "@botnews",
+        "@toncoin",
+        "@tonblockchain",
+        "@techcrunch",
+        "@verge",
+        "@nytimes",
+        "@bbcnews",
+        "@cnn",
+        "@reuters",
+        "@wsj",
+    ]
+
+    public_inputs = list(args.public)
+    private_inputs = list(args.private)
+    if args.demo:
+        public_inputs.extend(demo_public)
+
     added: list[Channel] = []
 
-    for raw in args.public:
+    for raw in public_inputs:
         ident = normalize_public(raw)
         if not ident:
             raise SystemExit(f"Invalid public identifier: {raw}")
         added.append(upsert_channel(ch_type=ChannelType.public, identifier=ident, backfill_days=args.backfill_days))
 
-    for raw in args.private:
+    for raw in private_inputs:
         ident = normalize_invite(raw)
         if not ident:
             raise SystemExit(f"Invalid private invite/hash: {raw}")
