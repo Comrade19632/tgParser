@@ -229,6 +229,15 @@ async def ensure_membership_once(*, max_channels: int = 50) -> MembershipSummary
         try:
             async with pool.connected(account=acc) as client:
                 if not await client.is_user_authorized():
+                    # Mark account as requiring re-auth so selector stops picking it.
+                    with SessionLocal() as db:
+                        db_acc = db.get(Account, acc.id)
+                        if db_acc:
+                            db_acc.status = AccountStatus.auth_required
+                            db_acc.last_error = "Telethon session is not authorized"
+                            db_acc.cooldown_until = None
+                            db_acc.updated_at = now
+                            db.commit()
                     continue
 
                 res = await ensure_joined(client=client, ch=ch)

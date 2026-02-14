@@ -9,6 +9,8 @@ ERRORS = "menu:errors"
 # Accounts actions
 ACC_ADD_PHONE = "accounts:add:phone"
 ACC_ADD_TDATA = "accounts:add:tdata"
+ACC_REAUTH_PHONE = "accounts:reauth:phone"  # prefix: accounts:reauth:phone:<id>:<page>
+ACC_REAUTH_TDATA = "accounts:reauth:tdata"  # prefix: accounts:reauth:tdata:<id>:<page>
 ACC_LIST = "accounts:list"  # exact or prefix: accounts:list:<page>
 ACC_VIEW = "accounts:view"  # prefix: accounts:view:<id>:<page>
 ACC_TOGGLE = "accounts:toggle"  # prefix: accounts:toggle:<id>:<page>

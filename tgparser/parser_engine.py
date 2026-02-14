@@ -54,6 +54,25 @@ def _mark_account_cooldown(*, account_id: int, seconds: int, note: str, now: dat
         db.commit()
 
 
+def _mark_account_auth_required(*, account_id: int, note: str, now: datetime) -> None:
+    """Mark account as requiring re-auth, but keep it enabled.
+
+    Rationale: user may want the account to stay ON, but we must exclude it from
+    the Telethon pool/selector until onboarding refreshes the session.
+    """
+
+    with SessionLocal() as db:
+        acc = db.get(Account, account_id)
+        if not acc:
+            return
+
+        acc.status = AccountStatus.auth_required
+        acc.cooldown_until = None
+        acc.last_error = (note or "")[:5000]
+        acc.updated_at = now
+        db.commit()
+
+
 def _quarantine_account(*, account_id: int, status: AccountStatus, note: str, now: datetime) -> None:
     """Quarantine account so selector stops picking it.
 
@@ -170,6 +189,11 @@ async def parse_new_posts_once() -> ParseSummary:
             try:
                 async with pool.connected(account=acc) as client:
                     if not await client.is_user_authorized():
+                        _mark_account_auth_required(
+                            account_id=acc.id,
+                            note="Telethon session is not authorized",
+                            now=now,
+                        )
                         exclude.add(acc.id)
                         continue
 

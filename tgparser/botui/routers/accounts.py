@@ -100,11 +100,36 @@ async def acc_add_phone_start(q: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
 
     profile = generate_device_profile(app_version="5.8.3 x64")
-    await state.update_data(profile=profile.__dict__, proxy_url=None)
+    await state.update_data(profile=profile.__dict__, proxy_url=None, reauth_account_id=None)
 
     if q.message:
         await q.message.answer(
             "Онбординг по коду.\n\nПришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+        )
+
+    await state.set_state(PhoneCodeFlow.proxy)
+
+
+@router.callback_query(F.data.startswith(f"{cb.ACC_REAUTH_PHONE}:"))
+async def acc_reauth_phone_start(q: CallbackQuery, state: FSMContext) -> None:
+    await q.answer()
+    await state.clear()
+
+    data = (q.data or "")
+    try:
+        _, _, account_id_s, _page_s = data.split(":", 3)
+        account_id = int(account_id_s)
+    except Exception:
+        await q.answer("Bad callback", show_alert=False)
+        return
+
+    profile = generate_device_profile(app_version="5.8.3 x64")
+    await state.update_data(profile=profile.__dict__, proxy_url=None, reauth_account_id=account_id)
+
+    if q.message:
+        await q.message.answer(
+            f"Переавторизация аккаунта #{account_id} (по коду).\n\n"
+            "Пришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
         )
 
     await state.set_state(PhoneCodeFlow.proxy)
@@ -184,13 +209,14 @@ async def acc_add_phone_code(m: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
-    await _create_account(
+    await _create_or_update_account(
         m=m,
         onboarding_method="phone-code",
         phone_number=data["phone_number"],
         api_id=profile.api_id,
         api_hash=profile.api_hash,
         session_string=session_string,
+        reauth_account_id=data.get("reauth_account_id"),
     )
 
     await state.clear()
@@ -219,13 +245,14 @@ async def acc_add_phone_two_fa(m: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
-    await _create_account(
+    await _create_or_update_account(
         m=m,
         onboarding_method="phone-code",
         phone_number=data["phone_number"],
         api_id=profile.api_id,
         api_hash=profile.api_hash,
         session_string=session_string,
+        reauth_account_id=data.get("reauth_account_id"),
     )
 
     await state.clear()
@@ -237,11 +264,36 @@ async def acc_add_tdata_start(q: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
 
     profile = generate_device_profile(app_version="5.8.3 x64")
-    await state.update_data(profile=profile.__dict__, proxy_url=None, two_fa=None)
+    await state.update_data(profile=profile.__dict__, proxy_url=None, two_fa=None, reauth_account_id=None)
 
     if q.message:
         await q.message.answer(
             "Онбординг через tdata.\n\nПришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+        )
+
+    await state.set_state(TdataFlow.proxy)
+
+
+@router.callback_query(F.data.startswith(f"{cb.ACC_REAUTH_TDATA}:"))
+async def acc_reauth_tdata_start(q: CallbackQuery, state: FSMContext) -> None:
+    await q.answer()
+    await state.clear()
+
+    data = (q.data or "")
+    try:
+        _, _, account_id_s, _page_s = data.split(":", 3)
+        account_id = int(account_id_s)
+    except Exception:
+        await q.answer("Bad callback", show_alert=False)
+        return
+
+    profile = generate_device_profile(app_version="5.8.3 x64")
+    await state.update_data(profile=profile.__dict__, proxy_url=None, two_fa=None, reauth_account_id=account_id)
+
+    if q.message:
+        await q.message.answer(
+            f"Переавторизация аккаунта #{account_id} (через tdata).\n\n"
+            "Пришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
         )
 
     await state.set_state(TdataFlow.proxy)
@@ -331,13 +383,14 @@ async def acc_add_tdata_file(m: Message, state: FSMContext) -> None:
         phone_number = (res.get("phone_number") or "").strip()
         session_string = res["session_string"]
 
-        await _create_account(
+        await _create_or_update_account(
             m=m,
             onboarding_method="tdata",
             phone_number=phone_number,
             api_id=profile.api_id,
             api_hash=profile.api_hash,
             session_string=session_string,
+            reauth_account_id=data.get("reauth_account_id"),
         )
     except (TdataArchiveError, FileNotFoundError) as e:
         await m.answer(f"tdata archive error: {e}")
@@ -367,7 +420,7 @@ async def flow_cancel(m: Message, state: FSMContext) -> None:
     await m.answer("Cancelled.")
 
 
-async def _create_account(
+async def _create_or_update_account(
     *,
     m: Message,
     onboarding_method: str,
@@ -375,12 +428,38 @@ async def _create_account(
     api_id: int,
     api_hash: str,
     session_string: str,
+    reauth_account_id: int | None = None,
 ) -> None:
     phone_number = (phone_number or "").strip()
     label = phone_number or f"acc-{onboarding_method}"
 
     with SessionLocal() as db:
-        # Avoid duplicates by phone if we have it.
+        # Re-auth path: overwrite session for the existing account.
+        if reauth_account_id is not None:
+            acc = db.get(Account, int(reauth_account_id))
+            if not acc:
+                await m.answer(f"Account not found: {reauth_account_id}")
+                return
+
+            acc.onboarding_method = onboarding_method
+            if phone_number:
+                acc.phone_number = phone_number
+            if label:
+                acc.label = label
+
+            acc.is_active = True
+            acc.status = AccountStatus.active
+            acc.session_string = session_string
+            acc.api_id = api_id
+            acc.api_hash = api_hash
+            acc.last_error = ""
+            acc.cooldown_until = None
+            db.commit()
+
+            await m.answer(f"Account re-authorized: {acc.label or acc.phone_number or acc.id}")
+            return
+
+        # Create path
         if phone_number:
             existing = db.execute(select(Account).where(Account.phone_number == phone_number)).scalar_one_or_none()
             if existing and existing.is_active:
@@ -408,8 +487,15 @@ PAGE_SIZE = 6
 
 def _counts_prefix_accounts(*, db) -> str:
     total = db.execute(select(Account.id)).all()
-    active = db.execute(select(Account.id).where(Account.is_active.is_(True))).all()
-    return f"Active/Total: {len(active)}/{len(total)}\n\n"
+    enabled = db.execute(select(Account.id).where(Account.is_active.is_(True))).all()
+    usable = db.execute(
+        select(Account.id).where(Account.is_active.is_(True), Account.status == AccountStatus.active)
+    ).all()
+
+    # Semantics:
+    # - enabled: toggled ON by user
+    # - usable: enabled AND Telethon session is authorized (status=active)
+    return f"Usable/Enabled/Total: {len(usable)}/{len(enabled)}/{len(total)}\n\n"
 
 
 def _accounts_list_kb(*, accounts: list[Account], page: int, total_pages: int) -> InlineKeyboardBuilder:
@@ -438,8 +524,17 @@ def _accounts_list_kb(*, accounts: list[Account], page: int, total_pages: int) -
     return kb
 
 
-def _account_detail_kb(*, account_id: int, is_active: bool, page: int) -> InlineKeyboardBuilder:
+def _account_detail_kb(
+    *, account_id: int, is_active: bool, status: AccountStatus | None, page: int
+) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
+
+    # If session is not authorized, offer re-auth flows that UPDATE session_string for this account.
+    if status == AccountStatus.auth_required:
+        kb.button(text="🔐 Переавторизовать (код)", callback_data=f"{cb.ACC_REAUTH_PHONE}:{account_id}:{page}")
+        kb.button(text="🔐 Переавторизовать (tdata)", callback_data=f"{cb.ACC_REAUTH_TDATA}:{account_id}:{page}")
+        kb.adjust(1, 1)
+
     action = "Выключить" if is_active else "Включить"
     kb.button(text=action, callback_data=f"{cb.ACC_TOGGLE}:{account_id}:{page}")
     kb.button(text="Удалить", callback_data=f"{cb.ACC_REMOVE}:{account_id}:{page}")
@@ -495,7 +590,10 @@ async def _render_accounts_list(q: CallbackQuery, *, page: int) -> None:
             status = acc.status.value if hasattr(acc.status, "value") else str(acc.status)
             last_error = (acc.last_error or "").strip()
             tail = f"\n    err: {last_error}" if last_error else ""
-            lines.append(f"#{acc.id} [{active_flag}] {label}\n    status={status}{tail}")
+            hint = ""
+            if acc.status == AccountStatus.auth_required:
+                hint = "\n    ⚠️ Нужна авторизация (не используется парсером)"
+            lines.append(f"#{acc.id} [{active_flag}] {label}\n    status={status}{hint}{tail}")
 
         prefix = _counts_prefix_accounts(db=db)
 
@@ -564,18 +662,29 @@ async def acc_view(q: CallbackQuery) -> None:
         last_error = (acc.last_error or "").strip()
         cooldown = acc.cooldown_until.isoformat() if getattr(acc, "cooldown_until", None) else "—"
 
+    hint = ""
+    if acc.status == AccountStatus.auth_required:
+        hint = "\n\n⚠️ Нужна авторизация. Этот аккаунт не будет использоваться парсером, пока не переавторизуете." \
+            "\nНажмите 'Переавторизовать' ниже и пройдите онбординг заново (код или tdata)."
+
     text = (
         f"Аккаунт #{account_id}\n\n"
         f"{label}\n"
         f"state={active_flag} status={status}\n"
         f"cooldown_until={cooldown}\n\n"
         f"last_error: {last_error if last_error else '—'}"
+        f"{hint}"
     )
 
     if q.message:
         await q.message.edit_text(
             text,
-            reply_markup=_account_detail_kb(account_id=account_id, is_active=(active_flag == 'active'), page=page).as_markup(),
+            reply_markup=_account_detail_kb(
+                account_id=account_id,
+                is_active=(active_flag == 'active'),
+                status=acc.status,
+                page=page,
+            ).as_markup(),
         )
 
 
