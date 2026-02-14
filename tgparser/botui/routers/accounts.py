@@ -259,14 +259,30 @@ async def acc_add_tdata_proxy_set(m: Message, state: FSMContext) -> None:
 @router.message(TdataFlow.two_fa, Command("skip"))
 async def acc_add_tdata_two_fa_skip(m: Message, state: FSMContext) -> None:
     await state.update_data(two_fa=None)
-    await m.answer("Send tdata archive as a .zip file (document).")
+    await m.answer(
+        "Send Telegram Desktop tdata as a .zip file (document).\n\n"
+        "How to prepare:\n"
+        "1) On a machine with Telegram Desktop logged in, locate the 'tdata' folder.\n"
+        "2) Zip it so that archive contains a top-level 'tdata/' directory (not just the files).\n"
+        "3) Send the .zip here as a document.\n\n"
+        "Security note: tdata contains active session material. Treat it like a password.\n"
+        "/cancel to abort."
+    )
     await state.set_state(TdataFlow.tdata)
 
 
 @router.message(TdataFlow.two_fa, F.text)
 async def acc_add_tdata_two_fa_set(m: Message, state: FSMContext) -> None:
     await state.update_data(two_fa=(m.text or "").strip())
-    await m.answer("Send tdata archive as a .zip file (document).")
+    await m.answer(
+        "Send Telegram Desktop tdata as a .zip file (document).\n\n"
+        "How to prepare:\n"
+        "1) On a machine with Telegram Desktop logged in, locate the 'tdata' folder.\n"
+        "2) Zip it so that archive contains a top-level 'tdata/' directory (not just the files).\n"
+        "3) Send the .zip here as a document.\n\n"
+        "Security note: tdata contains active session material. Treat it like a password.\n"
+        "/cancel to abort."
+    )
     await state.set_state(TdataFlow.tdata)
 
 
@@ -278,6 +294,15 @@ async def acc_add_tdata_file(m: Message, state: FSMContext) -> None:
     doc = m.document
     if not doc:
         await m.answer("No document found")
+        return
+
+    # Basic guardrail: keep uploads reasonably small (Telegram Desktop tdata is usually a few MB).
+    if doc.file_size and doc.file_size > 25 * 1024 * 1024:
+        await m.answer(
+            "tdata.zip is too large for this flow (limit: 25MB). "
+            "Please zip only the 'tdata' folder from Telegram Desktop and try again."
+        )
+        await state.clear()
         return
 
     # Save upload to a temp file
@@ -314,6 +339,15 @@ async def acc_add_tdata_file(m: Message, state: FSMContext) -> None:
         await m.answer(f"tdata onboarding failed: {type(e).__name__}: {e}")
     finally:
         await state.clear()
+
+
+@router.message(TdataFlow.tdata)
+async def acc_add_tdata_wrong_payload(m: Message) -> None:
+    await m.answer(
+        "Waiting for a .zip document with Telegram Desktop 'tdata'.\n"
+        "Please send it as a document attachment (not as text / photo).\n"
+        "/cancel to abort."
+    )
 
 
 @router.message(Command("cancel"))
