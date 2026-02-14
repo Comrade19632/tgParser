@@ -14,7 +14,13 @@ from .notify import notify_admin, notify_team
 from .telethon.account_service import TelethonConfigError
 from .telethon.dialogs import get_entity_from_dialogs
 from .telethon.join_service import ensure_joined
-from .telethon_client import connected_client
+from .telethon.pool import TelethonClientPool
+from .telethon.selector import (
+    AccountChannelStatus,
+    mark_account_used,
+    pick_account_for_channel,
+    upsert_membership,
+)
 
 log = logging.getLogger(__name__)
 
@@ -73,9 +79,6 @@ async def parse_new_posts_once() -> ParseSummary:
     now = datetime.now(timezone.utc)
 
     with SessionLocal() as db:
-        accounts = list(db.execute(select(Account).order_by(Account.id.asc())).scalars())
-        ready_accounts = [a for a in accounts if _is_account_ready(a, now=now)]
-
         channels = list(db.execute(select(Channel).order_by(Channel.id.asc())).scalars())
         actionable_channels = [c for c in channels if _channel_is_actionable(c)]
 
@@ -85,17 +88,12 @@ async def parse_new_posts_once() -> ParseSummary:
         log.info("parser: no actionable channels")
         return summary
 
-    if not ready_accounts:
-        log.warning("parser: no ready accounts (active+authorized). channels=%s", len(actionable_channels))
-        return ParseSummary(
-            channels_total=len(actionable_channels),
-            channels_checked=0,
-            channels_skipped_no_account=len(actionable_channels),
-            posts_inserted=0,
-        )
+    # Accounts are selected per-channel (rotation + membership-aware).
 
     inserted_total = 0
     checked = 0
+
+    pool = TelethonClientPool()
 
     for ch in actionable_channels:
         checked += 1
@@ -103,10 +101,20 @@ async def parse_new_posts_once() -> ParseSummary:
         last_exc: Exception | None = None
         parsed = False
 
-        for acc in ready_accounts:
+        exclude: set[int] = set()
+        attempts = 0
+
+        while attempts < 8:
+            attempts += 1
+            pick = pick_account_for_channel(ch=ch, exclude_account_ids=exclude)
+            acc = pick.account
+            if acc is None:
+                break
+
             try:
-                async with connected_client(account=acc) as client:
+                async with pool.connected(account=acc) as client:
                     if not await client.is_user_authorized():
+                        exclude.add(acc.id)
                         continue
 
                     # 1) Prefer dialogs entity (membership-aware) to avoid resolve username.
@@ -124,6 +132,40 @@ async def parse_new_posts_once() -> ParseSummary:
                         ChannelAccessStatus.active,
                     }:
                         join_res = await ensure_joined(client=client, ch=db_ch)
+
+                        # Track per-account membership state for selector.
+                        if join_res.access_status == ChannelAccessStatus.joined:
+                            upsert_membership(
+                                account_id=acc.id,
+                                channel_id=ch.id,
+                                status=AccountChannelStatus.joined,
+                                note=join_res.note,
+                                now=now,
+                            )
+                        elif join_res.access_status == ChannelAccessStatus.pending_approval:
+                            upsert_membership(
+                                account_id=acc.id,
+                                channel_id=ch.id,
+                                status=AccountChannelStatus.pending_approval,
+                                note=join_res.note,
+                                now=now,
+                            )
+                        elif join_res.access_status == ChannelAccessStatus.forbidden:
+                            upsert_membership(
+                                account_id=acc.id,
+                                channel_id=ch.id,
+                                status=AccountChannelStatus.forbidden,
+                                note=join_res.note,
+                                now=now,
+                            )
+                        elif join_res.access_status == ChannelAccessStatus.error:
+                            upsert_membership(
+                                account_id=acc.id,
+                                channel_id=ch.id,
+                                status=AccountChannelStatus.error,
+                                note=join_res.note,
+                                now=now,
+                            )
 
                         with SessionLocal() as db:
                             ch2 = db.get(Channel, ch.id)
@@ -220,14 +262,25 @@ async def parse_new_posts_once() -> ParseSummary:
                         inserted_total += inserted
 
                         log.info(
-                            "parser: channel=%s ident=%s cursor=%s->%s fetched=%s inserted~=%s",
+                            "parser: channel=%s ident=%s cursor=%s->%s fetched=%s inserted~=%s account_id=%s",
                             db_ch.id,
                             db_ch.identifier,
                             cursor,
                             db_ch.cursor_message_id,
                             len(rows),
                             inserted,
+                            acc.id,
                         )
+
+                    # Evidence for routing: this account successfully accessed the channel.
+                    upsert_membership(
+                        account_id=acc.id,
+                        channel_id=ch.id,
+                        status=AccountChannelStatus.joined,
+                        note="parsed_ok",
+                        now=now,
+                    )
+                    mark_account_used(account_id=acc.id, now=now)
 
                     parsed = True
                     break
@@ -242,6 +295,7 @@ async def parse_new_posts_once() -> ParseSummary:
                 )
             except errors.FloodError as e:
                 last_exc = e
+                exclude.add(acc.id)
                 if "FROZEN_METHOD_INVALID" in str(e):
                     with SessionLocal() as db:
                         db_acc = db.get(Account, acc.id)
@@ -260,6 +314,7 @@ async def parse_new_posts_once() -> ParseSummary:
                 continue
             except Exception as e:
                 last_exc = e
+                exclude.add(acc.id)
                 continue
 
         if not parsed:

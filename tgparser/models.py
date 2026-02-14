@@ -31,6 +31,15 @@ class ChannelAccessStatus(str, enum.Enum):
     error = "error"
 
 
+class AccountChannelStatus(str, enum.Enum):
+    unknown = "unknown"
+    join_requested = "join_requested"
+    pending_approval = "pending_approval"
+    joined = "joined"
+    forbidden = "forbidden"
+    error = "error"
+
+
 class Account(Base):
     __tablename__ = "accounts"
 
@@ -48,6 +57,9 @@ class Account(Base):
     status: Mapped[AccountStatus] = mapped_column(Enum(AccountStatus), default=AccountStatus.active)
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
+
+    # Rotation / scheduling: updated when we successfully use the account for onboarding/parsing.
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Telethon session: prefer StringSession stored in DB
     session_string: Mapped[str] = mapped_column(Text, default="")
@@ -92,6 +104,32 @@ class Channel(Base):
 
     __table_args__ = (
         UniqueConstraint("type", "identifier", name="uq_channel_type_identifier"),
+    )
+
+
+class AccountChannelMembership(Base):
+    __tablename__ = "account_channel_memberships"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+
+    status: Mapped[AccountChannelStatus] = mapped_column(Enum(AccountChannelStatus), default=AccountChannelStatus.unknown)
+    note: Mapped[str] = mapped_column(Text, default="")
+
+    join_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    forbidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    account: Mapped[Account] = relationship()  # type: ignore[name-defined]
+    channel: Mapped[Channel] = relationship()  # type: ignore[name-defined]
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "channel_id", name="uq_account_channel"),
     )
 
 
