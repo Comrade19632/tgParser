@@ -75,9 +75,8 @@ def main() -> None:
         "@verge",
         "@nytimes",
         "@bbcnews",
-        "@cnn",
         "@reuters",
-        "@wsj",
+        "@bloomberg",
     ]
 
     public_inputs = list(args.public)
