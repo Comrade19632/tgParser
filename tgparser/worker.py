@@ -16,6 +16,7 @@ from .settings import settings
 from .telethon.account_service import TelethonAccountService, TelethonConfigError
 from .telethon.session_storage import DbSessionStorage
 from .notify import notify_admin, notify_team
+from .membership_maintenance import ensure_membership_once
 from .parser_engine import parse_new_posts_once
 
 log = logging.getLogger(__name__)
@@ -236,6 +237,20 @@ async def tick(r: redis.Redis, *, tick_id: int) -> None:
     started = datetime.now(timezone.utc)
 
     summary = await _update_accounts_status()
+
+    # Membership maintenance (v1): proactively ensure account<->channel joins for private channels.
+    # This reduces wasted ticks where parser can't see entities in dialogs.
+    try:
+        mem_summary = await ensure_membership_once()
+        log.info(
+            "membership: ok channels=%s touched=%s updated=%s cooldown_marked=%s",
+            mem_summary.channels_total,
+            mem_summary.channels_touched,
+            mem_summary.memberships_updated,
+            mem_summary.accounts_cooldown_marked,
+        )
+    except Exception:
+        log.exception("membership: step failed")
 
     # Parser engine (v1): incremental fetch + persist + dedupe.
     parse_summary = await parse_new_posts_once()
