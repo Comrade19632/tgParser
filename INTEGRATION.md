@@ -4,11 +4,11 @@ This project exposes a small HTTP API for integrations (export posts, manage cha
 
 ## Base URL
 
-By default (prod compose), the API is exposed **only on localhost**:
+Prod compose publishes the API directly on the host (binds to **0.0.0.0**):
 
-- `http://127.0.0.1:${TG_PARSER_API_PORT:-18081}`
+- `http://<server-ip>:${TG_PARSER_API_PORT:-18081}`
 
-If you want it public, put a reverse proxy (Caddy/Nginx) in front and keep auth.
+No SSL / no domain by design. Access control is **bearer token** (see below).
 
 ## Auth
 
@@ -21,6 +21,15 @@ Token is configured in `.env`:
 - `SERVICE_API_TOKEN=...`
 
 If `SERVICE_API_TOKEN` is not set, API fails closed with `503`.
+
+### Token rotation
+
+1) Generate a new token (random 32+ chars).
+2) Update `.env` (`SERVICE_API_TOKEN=...`).
+3) Redeploy/restart api/bot/worker (`docker compose up -d --build`).
+4) Update all clients to use the new token.
+
+Note: tokens must never be sent as query params; use only the `Authorization` header.
 
 ## Endpoints
 
@@ -62,14 +71,14 @@ Replace `$TOKEN`.
 
 401 (no token):
 ```bash
-curl -i http://127.0.0.1:18081/api/channels
+curl -i http://<server-ip>:18081/api/channels
 ```
 
 List channels:
 ```bash
 curl -s \
   -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:18081/api/channels?limit=20&offset=0" | jq
+  "http://<server-ip>:18081/api/channels?limit=20&offset=0" | jq
 ```
 
 Add/update channel:
@@ -78,12 +87,12 @@ curl -s \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"type":"public","identifier":"durov","backfill_days":7,"is_active":true}' \
-  http://127.0.0.1:18081/api/channels | jq
+  http://<server-ip>:18081/api/channels | jq
 ```
 
 Export posts with date filters:
 ```bash
 curl -s \
   -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:18081/api/posts?channel_identifier=durov&channel_type=public&date_from=2026-01-01T00:00:00Z&date_to=2026-02-01T00:00:00Z&limit=50" | jq
+  "http://<server-ip>:18081/api/posts?channel_identifier=durov&channel_type=public&date_from=2026-01-01T00:00:00Z&date_to=2026-02-01T00:00:00Z&limit=50" | jq
 ```

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
+import time
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -11,7 +13,42 @@ from tgparser.models import Channel, ChannelType, Post
 from .deps import get_db, require_token
 from .schemas import ChannelOut, ChannelUpsertIn, ChannelsListResponse, PostOut, PostsListResponse
 
+logger = logging.getLogger("tgparser.api")
+
 app = FastAPI(title="tgParser HTTP API", version="v1")
+
+
+# Very simple in-memory rate limiter.
+# Goal: protect the public port from obvious abuse. Not meant for multi-instance.
+_RATE_WINDOW_SECONDS = 60
+_RATE_MAX_REQUESTS = 120  # ~2 rps average per IP
+_rate_state: dict[str, tuple[int, int]] = {}  # ip -> (window_start_ts, count)
+
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    ip = (request.client.host if request.client else "unknown")
+    now = int(time.time())
+    window_start, count = _rate_state.get(ip, (now, 0))
+
+    if now - window_start >= _RATE_WINDOW_SECONDS:
+        window_start, count = now, 0
+
+    count += 1
+    _rate_state[ip] = (window_start, count)
+
+    if count > _RATE_MAX_REQUESTS:
+        retry_after = max(1, _RATE_WINDOW_SECONDS - (now - window_start))
+        # Never log auth headers/tokens.
+        logger.warning("rate_limited ip=%s path=%s", ip, request.url.path)
+        return Response(
+            status_code=429,
+            content="rate_limited",
+            headers={"Retry-After": str(retry_after)},
+            media_type="text/plain",
+        )
+
+    return await call_next(request)
 
 
 def _parse_dt(v: str | None, *, field: str) -> datetime | None:
@@ -27,7 +64,7 @@ def _parse_dt(v: str | None, *, field: str) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
-@app.get("/health")
+@app.get("/health", dependencies=[Depends(require_token)])
 def health():
     return {"ok": True}
 

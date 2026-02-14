@@ -49,8 +49,8 @@ services:
   api:
     restart: unless-stopped
     ports:
-      # Expose only to localhost by default; put Caddy/Nginx in front if you want public access.
-      - "127.0.0.1:${TG_PARSER_API_PORT:-18081}:8000"
+      # Public bind (no SSL / no domain). Access control is SERVICE_API_TOKEN bearer.
+      - "${TG_PARSER_API_PORT:-18081}:8000"
     logging:
       driver: json-file
       options:
