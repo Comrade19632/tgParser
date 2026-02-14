@@ -4,6 +4,7 @@ MAIN = "menu:main"
 ACCOUNTS = "menu:accounts"
 CHANNELS = "menu:channels"
 STATUS = "menu:status"
+ERRORS = "menu:errors"
 
 # Accounts actions
 ACC_ADD_PHONE = "accounts:add:phone"
@@ -24,7 +25,7 @@ REFRESH = "nav:refresh"
 
 
 def is_menu_callback(data: str | None) -> bool:
-    return data in {MAIN, ACCOUNTS, CHANNELS, STATUS}
+    return data in {MAIN, ACCOUNTS, CHANNELS, STATUS, ERRORS}
 
 
 def is_nav_callback(data: str | None) -> bool:

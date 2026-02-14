@@ -21,7 +21,8 @@ def get_view(key: str) -> View:
                 "Choose a section:\n\n"
                 "• Accounts — manage Telethon userbot accounts (stub)\n"
                 "• Channels — manage channels list (stub)\n"
-                "• Status — parser health and last tick (stub)\n"
+                "• Status — parser health and last tick\n"
+                "• Errors — recent errors across accounts/channels\n"
             ),
         )
     if key == cb.ACCOUNTS:
@@ -51,13 +52,13 @@ def get_view(key: str) -> View:
         return View(
             key=cb.STATUS,
             title="Status",
-            body=(
-                "Parser status (stub).\n\n"
-                "Later will show:\n"
-                "- last worker tick time\n"
-                "- processed channels\n"
-                "- new posts count\n"
-                "- recent errors\n"
-            ),
+            body="Use /status or the Status button in the main menu.",
+        )
+
+    if key == cb.ERRORS:
+        return View(
+            key=cb.ERRORS,
+            title="Errors",
+            body="Use /errors or the Errors button in the main menu.",
         )
     return View(key=key, title="Unknown", body="Unknown view.")

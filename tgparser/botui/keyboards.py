@@ -12,7 +12,10 @@ def main_menu_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Accounts", callback_data=cb.ACCOUNTS),
                 InlineKeyboardButton(text="Channels", callback_data=cb.CHANNELS),
             ],
-            [InlineKeyboardButton(text="Status", callback_data=cb.STATUS)],
+            [
+                InlineKeyboardButton(text="Status", callback_data=cb.STATUS),
+                InlineKeyboardButton(text="Errors", callback_data=cb.ERRORS),
+            ],
             [InlineKeyboardButton(text="Refresh", callback_data=cb.MAIN)],
         ]
     )

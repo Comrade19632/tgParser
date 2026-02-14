@@ -3,11 +3,14 @@ from __future__ import annotations
 import logging
 
 import redis.asyncio as redis
+from sqlalchemy import select
 from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
+from ...db import SessionLocal
+from ...models import Account, Channel
 from ...settings import settings
 from ...user_tracking import track_user
 from ...worker import LAST_TICK_KEY
@@ -53,14 +56,77 @@ async def _status_body() -> str:
         f"- auth_required: {_get('accounts_auth_required', '0')}\n"
         f"- cooldown: {_get('accounts_cooldown', '0')}\n"
         f"- banned: {_get('accounts_banned', '0')}\n"
-        f"- error: {_get('accounts_error', '0')}\n"
+        f"- error: {_get('accounts_error', '0')}\n\n"
+        "Channels / posts:\n"
+        f"- channels_checked: {_get('channels_checked', '0')}\n"
+        f"- channels_total: {_get('channels_total', '0')}\n"
+        f"- posts_inserted: {_get('posts_inserted', '0')}\n\n"
+        "Tip: use /errors to see recent account/channel errors."
     )
+
+
+def _short_err(s: str, *, limit: int = 200) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    if len(s) <= limit:
+        return s
+    return s[: limit - 1] + "…"
+
+
+async def _errors_body() -> str:
+    # Recent errors are stored in DB in last_error fields.
+    with SessionLocal() as db:
+        accs = list(
+            db.execute(
+                select(Account)
+                .where(Account.last_error != "")
+                .order_by(Account.updated_at.desc())
+                .limit(10)
+            ).scalars()
+        )
+        chs = list(
+            db.execute(
+                select(Channel)
+                .where(Channel.last_error != "")
+                .order_by(Channel.last_checked_at.desc().nullslast(), Channel.id.desc())
+                .limit(10)
+            ).scalars()
+        )
+
+    lines: list[str] = []
+
+    lines.append("Accounts errors:")
+    if not accs:
+        lines.append("- (none)")
+    else:
+        for a in accs:
+            ident = a.label or a.phone_number or f"id={a.id}"
+            lines.append(f"- #{a.id} {ident} status={a.status.value} updated={a.updated_at.isoformat()} err={_short_err(a.last_error)}")
+
+    lines.append("")
+    lines.append("Channels errors:")
+    if not chs:
+        lines.append("- (none)")
+    else:
+        for c in chs:
+            when = c.last_checked_at.isoformat() if c.last_checked_at else "?"
+            lines.append(
+                f"- #{c.id} {c.type.value}:{c.identifier} status={c.access_status.value} checked={when} err={_short_err(c.last_error)}"
+            )
+
+    return "\n".join(lines).strip()
 
 
 async def _render_message(*, m: Message, view_key: str) -> None:
     if view_key == cb.STATUS:
         body = await _status_body()
         await m.answer(f"Status\n\n{body}", reply_markup=submenu_kb())
+        return
+
+    if view_key == cb.ERRORS:
+        body = await _errors_body()
+        await m.answer(f"Errors\n\n{body}", reply_markup=submenu_kb())
         return
 
     view = get_view(view_key)
@@ -75,6 +141,8 @@ async def _render_callback(*, q: CallbackQuery, view_key: str) -> None:
 
     if view_key == cb.STATUS:
         text = f"Status\n\n{await _status_body()}"
+    elif view_key == cb.ERRORS:
+        text = f"Errors\n\n{await _errors_body()}"
     else:
         view = get_view(view_key)
         text = f"{view.title}\n\n{view.body}"
@@ -105,6 +173,13 @@ async def cmd_status(m: Message) -> None:
     await _render_message(m=m, view_key=cb.STATUS)
 
 
+@router.message(Command("errors"))
+async def cmd_errors(m: Message) -> None:
+    if m.from_user:
+        track_user(m.from_user.id)
+    await _render_message(m=m, view_key=cb.ERRORS)
+
+
 @router.callback_query(lambda q: cb.is_menu_callback(q.data))
 async def on_menu(q: CallbackQuery) -> None:
     await q.answer()
@@ -125,4 +200,6 @@ async def on_refresh(q: CallbackQuery) -> None:
             current = cb.CHANNELS
         elif q.message.text.startswith("Status"):
             current = cb.STATUS
+        elif q.message.text.startswith("Errors"):
+            current = cb.ERRORS
     await _render_callback(q=q, view_key=current)
