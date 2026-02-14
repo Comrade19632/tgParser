@@ -46,7 +46,18 @@ Expected:
 - `bot` starts and listens for Telegram updates
 - `worker` runs and logs a tick once per hour (and uses Redis lock)
 
-## 2) Update (rolling)
+## 2) Release DoD / acceptance (E2E)
+
+See `ACCEPTANCE.md` for the end-to-end checklist.
+
+Quick manual tick trigger (useful for acceptance and debugging):
+
+```bash
+cd /opt/tgParser
+sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T worker python -m tgparser.tick_once --force
+```
+
+## 3) Update (rolling)
 
 ```bash
 cd /opt/tgParser
