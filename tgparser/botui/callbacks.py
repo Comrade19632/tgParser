@@ -16,7 +16,8 @@ ACC_REMOVE = "accounts:remove"  # prefix: accounts:remove:<id>
 # Channels actions
 CH_ADD_PUBLIC = "channels:add:public"
 CH_ADD_PRIVATE = "channels:add:private"
-CH_LIST = "channels:list"
+CH_LIST = "channels:list"  # exact or prefix: channels:list:<page>
+CH_TOGGLE = "channels:toggle"  # prefix: channels:toggle:<id>:<page>
 CH_DISABLE = "channels:disable"  # prefix: channels:disable:<id>
 CH_ENABLE = "channels:enable"  # prefix: channels:enable:<id>
 

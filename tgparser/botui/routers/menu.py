@@ -118,6 +118,24 @@ async def _errors_body() -> str:
     return "\n".join(lines).strip()
 
 
+def _counts_prefix(*, view_key: str) -> str:
+    if view_key not in {cb.ACCOUNTS, cb.CHANNELS}:
+        return ""
+
+    with SessionLocal() as db:
+        if view_key == cb.ACCOUNTS:
+            total = db.execute(select(Account.id)).all()
+            active = db.execute(select(Account.id).where(Account.is_active.is_(True))).all()
+            return f"Active/Total: {len(active)}/{len(total)}\n\n"
+
+        if view_key == cb.CHANNELS:
+            total = db.execute(select(Channel.id)).all()
+            active = db.execute(select(Channel.id).where(Channel.is_active.is_(True))).all()
+            return f"Active/Total: {len(active)}/{len(total)}\n\n"
+
+    return ""
+
+
 async def _render_message(*, m: Message, view_key: str) -> None:
     if view_key == cb.STATUS:
         body = await _status_body()
@@ -130,10 +148,11 @@ async def _render_message(*, m: Message, view_key: str) -> None:
         return
 
     view = get_view(view_key)
+    prefix = _counts_prefix(view_key=view_key)
     if view.key == cb.MAIN:
         await m.answer(f"{view.title}\n\n{view.body}", reply_markup=main_menu_kb())
     else:
-        await m.answer(f"{view.title}\n\n{view.body}", reply_markup=submenu_kb())
+        await m.answer(f"{view.title}\n\n{prefix}{view.body}", reply_markup=submenu_kb())
 
 
 async def _render_callback(*, q: CallbackQuery, view_key: str) -> None:
@@ -145,7 +164,8 @@ async def _render_callback(*, q: CallbackQuery, view_key: str) -> None:
         text = f"Ошибки\n\n{await _errors_body()}"
     else:
         view = get_view(view_key)
-        text = f"{view.title}\n\n{view.body}"
+        prefix = _counts_prefix(view_key=view_key)
+        text = f"{view.title}\n\n{prefix}{view.body}"
 
     # Prefer edit to keep UI clean; fall back to sending a new message.
     try:

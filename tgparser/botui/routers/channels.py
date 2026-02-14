@@ -33,7 +33,7 @@ def channels_actions_kb() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     kb.button(text="Добавить public", callback_data=cb.CH_ADD_PUBLIC)
     kb.button(text="Добавить private", callback_data=cb.CH_ADD_PRIVATE)
-    kb.button(text="Список", callback_data=cb.CH_LIST)
+    kb.button(text="Список", callback_data=f"{cb.CH_LIST}:0")
     kb.adjust(2, 1)
     kb.button(text="← Назад", callback_data=cb.MAIN)
     kb.button(text="Обновить", callback_data=cb.CHANNELS)
@@ -318,38 +318,121 @@ async def ch_add_backfill(m: Message, state: FSMContext) -> None:
     await state.clear()
 
 
-@router.callback_query(lambda q: q.data == cb.CH_LIST)
-async def ch_list(q: CallbackQuery) -> None:
-    await q.answer()
+PAGE_SIZE = 6
+
+
+def _channels_list_kb(*, channels: list[Channel], page: int, total_pages: int) -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+
+    # One row per channel: toggle active/disabled
+    for ch in channels:
+        icon = "✅" if ch.is_active else "⛔"
+        label = ch.title.strip() or f"{ch.type.value}:{ch.identifier}"
+        text = f"{icon} #{ch.id} {label}"
+        kb.button(text=text[:64], callback_data=f"{cb.CH_TOGGLE}:{ch.id}:{page}")
+
+    kb.adjust(1)
+
+    # Pager
+    prev_page = max(0, page - 1)
+    next_page = min(total_pages - 1, page + 1)
+
+    kb.button(text="◀ Prev", callback_data=f"{cb.CH_LIST}:{prev_page}")
+    kb.button(text=f"{page + 1}/{total_pages}", callback_data="noop")
+    kb.button(text="Next ▶", callback_data=f"{cb.CH_LIST}:{next_page}")
+    kb.adjust(3)
+
+    # Footer
+    kb.button(text="← Каналы", callback_data=cb.CHANNELS)
+    kb.button(text="Обновить", callback_data=f"{cb.CH_LIST}:{page}")
+    kb.adjust(2)
+
+    return kb
+
+
+async def _render_channels_list(q: CallbackQuery, *, page: int) -> None:
+    page = max(0, page)
 
     with SessionLocal() as db:
-        channels = list(db.execute(select(Channel).order_by(Channel.id.asc())).scalars())
+        all_channels = list(db.execute(select(Channel).order_by(Channel.id.asc())).scalars())
 
-    if not channels:
+    if not all_channels:
         if q.message:
-            await q.message.answer("No channels yet.")
+            await q.message.edit_text(
+                "Каналы\n\nПока нет каналов.",
+                reply_markup=channels_actions_kb().as_markup(),
+            )
         return
 
+    total_pages = max(1, (len(all_channels) + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(page, total_pages - 1)
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+    page_items = all_channels[start:end]
+
     lines: list[str] = []
-    for ch in channels:
+    for ch in page_items:
         active_flag = "active" if ch.is_active else "disabled"
         last_checked = ch.last_checked_at.isoformat() if ch.last_checked_at else "—"
         last_error = (ch.last_error or "").strip()
-        tail = f" — {last_error}" if last_error else ""
+        tail = f"\n    err: {last_error}" if last_error else ""
+        ident = ch.title.strip() or f"{ch.type.value}:{ch.identifier}"
         lines.append(
-            f"#{ch.id} [{active_flag}] {ch.type.value}:{ch.identifier} backfill={ch.backfill_days} "
-            f"status={ch.access_status.value} checked={last_checked}{tail}"
+            f"#{ch.id} [{active_flag}] {ident}\n"
+            f"    backfill={ch.backfill_days} status={ch.access_status.value} checked={last_checked}{tail}"
         )
 
-    if q.message:
-        await q.message.answer("Channels:\n" + "\n".join(lines))
+    text = "Каналы\n\n" + "\n\n".join(lines)
 
-        # Send per-row controls (avoid huge inline keyboards)
-        for ch in channels[:10]:
-            await q.message.answer(
-                f"Channel #{ch.id}",
-                reply_markup=channel_row_kb(channel_id=ch.id, is_active=ch.is_active).as_markup(),
-            )
+    if q.message:
+        await q.message.edit_text(
+            text,
+            reply_markup=_channels_list_kb(channels=page_items, page=page, total_pages=total_pages).as_markup(),
+        )
+
+
+@router.callback_query(lambda q: (q.data or "") == cb.CH_LIST or (q.data or "").startswith(f"{cb.CH_LIST}:"))
+async def ch_list(q: CallbackQuery) -> None:
+    await q.answer()
+
+    data = (q.data or "").strip()
+    page = 0
+    if data.startswith(f"{cb.CH_LIST}:"):
+        try:
+            page = int(data.split(":", 1)[1])
+        except Exception:
+            page = 0
+
+    await _render_channels_list(q, page=page)
+
+
+@router.callback_query(F.data.startswith(f"{cb.CH_TOGGLE}:"))
+async def ch_toggle(q: CallbackQuery) -> None:
+    data = (q.data or "")
+    try:
+        _, _, channel_id_s, page_s = data.split(":", 3)
+        channel_id = int(channel_id_s)
+        page = int(page_s)
+    except Exception:
+        await q.answer("Bad callback", show_alert=False)
+        return
+
+    with SessionLocal() as db:
+        ch = db.get(Channel, channel_id)
+        if not ch:
+            await q.answer("Channel not found", show_alert=False)
+            return
+        ch.is_active = not ch.is_active
+        db.commit()
+        new_state = "enabled" if ch.is_active else "disabled"
+
+    await q.answer(f"Channel {new_state}")
+    await _render_channels_list(q, page=page)
+
+
+@router.callback_query(lambda q: (q.data or "") == "noop")
+async def noop(q: CallbackQuery) -> None:
+    await q.answer()
 
 
 @router.callback_query(F.data.startswith(f"{cb.CH_DISABLE}:"))
