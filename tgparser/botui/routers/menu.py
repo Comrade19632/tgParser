@@ -212,7 +212,7 @@ async def on_menu(q: CallbackQuery) -> None:
 
 @router.callback_query(lambda q: q.data == cb.REFRESH)
 async def on_refresh(q: CallbackQuery) -> None:
-    await q.answer("Refreshing…")
+    await q.answer("Обновляю…")
     # Keep the same current view if possible; fallback to main.
     current = cb.MAIN
     if q.message and q.message.text:

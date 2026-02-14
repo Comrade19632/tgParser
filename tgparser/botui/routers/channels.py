@@ -44,9 +44,9 @@ def channels_actions_kb() -> InlineKeyboardBuilder:
 def channel_row_kb(*, channel_id: int, is_active: bool) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     if is_active:
-        kb.button(text="Disable", callback_data=f"{cb.CH_DISABLE}:{channel_id}")
+        kb.button(text="Выключить", callback_data=f"{cb.CH_DISABLE}:{channel_id}")
     else:
-        kb.button(text="Enable", callback_data=f"{cb.CH_ENABLE}:{channel_id}")
+        kb.button(text="Включить", callback_data=f"{cb.CH_ENABLE}:{channel_id}")
     kb.adjust(1)
     return kb
 

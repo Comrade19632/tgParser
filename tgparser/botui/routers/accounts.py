@@ -48,9 +48,9 @@ def accounts_actions_kb() -> InlineKeyboardBuilder:
 
 def account_row_kb(*, account_id: int, is_active: bool, page: int = 0) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
-    action = "Disable" if is_active else "Enable"
+    action = "Выключить" if is_active else "Включить"
     kb.button(text=action, callback_data=f"{cb.ACC_TOGGLE}:{account_id}:{page}")
-    kb.button(text="Remove", callback_data=f"{cb.ACC_REMOVE}:{account_id}:{page}")
+    kb.button(text="Удалить", callback_data=f"{cb.ACC_REMOVE}:{account_id}:{page}")
     kb.adjust(2)
     return kb
 
@@ -138,7 +138,7 @@ async def acc_add_phone_phone(m: Message, state: FSMContext) -> None:
     try:
         start_info = await phone_code_start(phone_number=phone, profile=profile, proxy_url=proxy_url)
     except Exception as e:
-        await m.answer(f"Failed to send code: {type(e).__name__}: {e}")
+        await m.answer(f"Не удалось отправить код: {type(e).__name__}: {e}")
         await state.clear()
         return
 
@@ -180,7 +180,7 @@ async def acc_add_phone_code(m: Message, state: FSMContext) -> None:
             await state.set_state(PhoneCodeFlow.two_fa)
             return
 
-        await m.answer(f"Login failed: {type(e).__name__}: {e}")
+        await m.answer(f"Не удалось войти: {type(e).__name__}: {e}")
         await state.clear()
         return
 
@@ -215,7 +215,7 @@ async def acc_add_phone_two_fa(m: Message, state: FSMContext) -> None:
             two_fa=two_fa,
         )
     except Exception as e:
-        await m.answer(f"Login failed: {type(e).__name__}: {e}")
+        await m.answer(f"Не удалось войти: {type(e).__name__}: {e}")
         await state.clear()
         return
 
@@ -440,12 +440,12 @@ def _accounts_list_kb(*, accounts: list[Account], page: int, total_pages: int) -
 
 def _account_detail_kb(*, account_id: int, is_active: bool, page: int) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
-    action = "Disable" if is_active else "Enable"
+    action = "Выключить" if is_active else "Включить"
     kb.button(text=action, callback_data=f"{cb.ACC_TOGGLE}:{account_id}:{page}")
-    kb.button(text="Remove", callback_data=f"{cb.ACC_REMOVE}:{account_id}:{page}")
+    kb.button(text="Удалить", callback_data=f"{cb.ACC_REMOVE}:{account_id}:{page}")
     kb.adjust(2)
 
-    kb.button(text="← Back to list", callback_data=f"{cb.ACC_LIST}:{page}")
+    kb.button(text="← К списку", callback_data=f"{cb.ACC_LIST}:{page}")
     kb.adjust(1)
     return kb
 
