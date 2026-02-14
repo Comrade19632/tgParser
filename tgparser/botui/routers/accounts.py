@@ -15,7 +15,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
 from ...db import SessionLocal
-from ...models import Account, AccountStatus
+from ...models import Account, AccountChannelMembership, AccountChannelStatus, AccountStatus
 from ...telethon.account_service import TelethonAccountService
 from ...telethon.onboarding import (
     TelethonDeviceProfile,
@@ -715,6 +715,18 @@ async def acc_toggle(q: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith(f"{cb.ACC_REMOVE}:"))
 async def acc_remove(q: CallbackQuery) -> None:
+    """Soft-remove an account.
+
+    We intentionally DO NOT hard-delete accounts because they can be referenced by
+    membership/history rows (and hard delete may fail or break invariants).
+
+    DoD for "remove":
+    - account is deactivated (is_active=False)
+    - status set to a non-usable state
+    - session_string wiped
+    - UI list refreshed (same page)
+    """
+
     await q.answer()
 
     data = (q.data or "")
@@ -730,7 +742,27 @@ async def acc_remove(q: CallbackQuery) -> None:
         if not acc:
             await q.answer("Account not found", show_alert=False)
             return
-        db.delete(acc)
+
+        # soft remove
+        acc.is_active = False
+        # We don't have AccountStatus.removed; 'forbidden' is used as a safe quarantined state.
+        acc.status = AccountStatus.forbidden
+        acc.session_string = ""
+        acc.cooldown_until = None
+        if not (acc.last_error or "").strip():
+            acc.last_error = "removed by operator"
+
+        # Mark related memberships as forbidden too (best-effort; keeps UI consistent).
+        memberships = list(
+            db.execute(select(AccountChannelMembership).where(AccountChannelMembership.account_id == account_id))
+            .scalars()
+            .all()
+        )
+        for m in memberships:
+            m.status = AccountChannelStatus.forbidden
+            if not (m.note or "").strip():
+                m.note = "account removed"
+
         db.commit()
 
     await q.answer(f"Account #{account_id} removed")
