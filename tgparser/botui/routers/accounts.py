@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
 
@@ -313,7 +314,8 @@ async def acc_add_tdata_file(m: Message, state: FSMContext) -> None:
         f = await m.bot.get_file(doc.file_id)
         await m.bot.download_file(f.file_path, destination=archive_path)
 
-        tdata_folder = extract_tdata_from_archive(archive_path=archive_path)
+        extract_root = os.path.join(tmp_dir, "extracted")
+        tdata_folder = extract_tdata_from_archive(archive_path=archive_path, extract_root=extract_root)
 
         res = await tdata_to_session_string(
             tdata_folder=tdata_folder,
@@ -338,6 +340,11 @@ async def acc_add_tdata_file(m: Message, state: FSMContext) -> None:
     except Exception as e:
         await m.answer(f"tdata onboarding failed: {type(e).__name__}: {e}")
     finally:
+        # Best-effort cleanup of secrets (tdata archive + extracted folder)
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
         await state.clear()
 
 
