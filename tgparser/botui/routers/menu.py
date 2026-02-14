@@ -29,9 +29,9 @@ async def _status_body() -> str:
 
     if not data:
         return (
-            "No tick metadata yet.\n\n"
-            "Worker has not completed a tick, or Redis was reset.\n"
-            "Try again after the next worker run."
+            "Пока нет данных о тике.\n\n"
+            "Воркeр ещё не завершал тик или Redis был очищен.\n"
+            "Попробуйте позже (после следующего тика)."
         )
 
     # redis-py returns dict[bytes, bytes]
@@ -45,23 +45,23 @@ async def _status_body() -> str:
             return default
 
     return (
-        "Last tick:\n"
+        "Последний тик:\n"
         f"- id: {_get('tick_id')}\n"
         f"- started_at: {_get('started_at')}\n"
         f"- finished_at: {_get('finished_at')}\n"
         f"- duration_s: {_get('duration_s')}\n\n"
-        "Accounts summary:\n"
+        "Аккаунты (сводка):\n"
         f"- active_total: {_get('accounts_active_total', '0')}\n"
         f"- checked: {_get('accounts_checked', '0')}\n"
         f"- auth_required: {_get('accounts_auth_required', '0')}\n"
         f"- cooldown: {_get('accounts_cooldown', '0')}\n"
         f"- banned: {_get('accounts_banned', '0')}\n"
         f"- error: {_get('accounts_error', '0')}\n\n"
-        "Channels / posts:\n"
+        "Каналы / посты:\n"
         f"- channels_checked: {_get('channels_checked', '0')}\n"
         f"- channels_total: {_get('channels_total', '0')}\n"
         f"- posts_inserted: {_get('posts_inserted', '0')}\n\n"
-        "Tip: use /errors to see recent account/channel errors."
+        "Подсказка: /errors показывает последние ошибки по аккаунтам/каналам."
     )
 
 
@@ -96,7 +96,7 @@ async def _errors_body() -> str:
 
     lines: list[str] = []
 
-    lines.append("Accounts errors:")
+    lines.append("Ошибки аккаунтов:")
     if not accs:
         lines.append("- (none)")
     else:
@@ -105,7 +105,7 @@ async def _errors_body() -> str:
             lines.append(f"- #{a.id} {ident} status={a.status.value} updated={a.updated_at.isoformat()} err={_short_err(a.last_error)}")
 
     lines.append("")
-    lines.append("Channels errors:")
+    lines.append("Ошибки каналов:")
     if not chs:
         lines.append("- (none)")
     else:
@@ -121,12 +121,12 @@ async def _errors_body() -> str:
 async def _render_message(*, m: Message, view_key: str) -> None:
     if view_key == cb.STATUS:
         body = await _status_body()
-        await m.answer(f"Status\n\n{body}", reply_markup=submenu_kb())
+        await m.answer(f"Статус\n\n{body}", reply_markup=submenu_kb())
         return
 
     if view_key == cb.ERRORS:
         body = await _errors_body()
-        await m.answer(f"Errors\n\n{body}", reply_markup=submenu_kb())
+        await m.answer(f"Ошибки\n\n{body}", reply_markup=submenu_kb())
         return
 
     view = get_view(view_key)
@@ -140,9 +140,9 @@ async def _render_callback(*, q: CallbackQuery, view_key: str) -> None:
     markup = main_menu_kb() if view_key == cb.MAIN else submenu_kb()
 
     if view_key == cb.STATUS:
-        text = f"Status\n\n{await _status_body()}"
+        text = f"Статус\n\n{await _status_body()}"
     elif view_key == cb.ERRORS:
-        text = f"Errors\n\n{await _errors_body()}"
+        text = f"Ошибки\n\n{await _errors_body()}"
     else:
         view = get_view(view_key)
         text = f"{view.title}\n\n{view.body}"
@@ -194,12 +194,12 @@ async def on_refresh(q: CallbackQuery) -> None:
     # Keep the same current view if possible; fallback to main.
     current = cb.MAIN
     if q.message and q.message.text:
-        if q.message.text.startswith("Accounts"):
+        if q.message.text.startswith("Аккаунты"):
             current = cb.ACCOUNTS
-        elif q.message.text.startswith("Channels"):
+        elif q.message.text.startswith("Каналы"):
             current = cb.CHANNELS
-        elif q.message.text.startswith("Status"):
+        elif q.message.text.startswith("Статус"):
             current = cb.STATUS
-        elif q.message.text.startswith("Errors"):
+        elif q.message.text.startswith("Ошибки"):
             current = cb.ERRORS
     await _render_callback(q=q, view_key=current)

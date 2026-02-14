@@ -9,14 +9,14 @@ def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Accounts", callback_data=cb.ACCOUNTS),
-                InlineKeyboardButton(text="Channels", callback_data=cb.CHANNELS),
+                InlineKeyboardButton(text="Аккаунты", callback_data=cb.ACCOUNTS),
+                InlineKeyboardButton(text="Каналы", callback_data=cb.CHANNELS),
             ],
             [
-                InlineKeyboardButton(text="Status", callback_data=cb.STATUS),
-                InlineKeyboardButton(text="Errors", callback_data=cb.ERRORS),
+                InlineKeyboardButton(text="Статус", callback_data=cb.STATUS),
+                InlineKeyboardButton(text="Ошибки", callback_data=cb.ERRORS),
             ],
-            [InlineKeyboardButton(text="Refresh", callback_data=cb.MAIN)],
+            [InlineKeyboardButton(text="Обновить", callback_data=cb.MAIN)],
         ]
     )
 
@@ -24,6 +24,6 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 def submenu_kb(*, back_to_main: bool = True) -> InlineKeyboardMarkup:
     row: list[InlineKeyboardButton] = []
     if back_to_main:
-        row.append(InlineKeyboardButton(text="← Back", callback_data=cb.MAIN))
-    row.append(InlineKeyboardButton(text="Refresh", callback_data=cb.REFRESH))
+        row.append(InlineKeyboardButton(text="← Назад", callback_data=cb.MAIN))
+    row.append(InlineKeyboardButton(text="Обновить", callback_data=cb.REFRESH))
     return InlineKeyboardMarkup(inline_keyboard=[row])

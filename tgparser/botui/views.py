@@ -18,47 +18,46 @@ def get_view(key: str) -> View:
             key=cb.MAIN,
             title="TG Parser",
             body=(
-                "Choose a section:\n\n"
-                "• Accounts — manage Telethon userbot accounts (stub)\n"
-                "• Channels — manage channels list (stub)\n"
-                "• Status — parser health and last tick\n"
-                "• Errors — recent errors across accounts/channels\n"
+                "Выберите раздел:\n\n"
+                "• Аккаунты — управление userbot-аккаунтами (Telethon)\n"
+                "• Каналы — список каналов для парсинга\n"
+                "• Статус — здоровье парсера и последний тик\n"
+                "• Ошибки — последние ошибки по аккаунтам/каналам\n"
             ),
         )
     if key == cb.ACCOUNTS:
         return View(
             key=cb.ACCOUNTS,
-            title="Accounts",
+            title="Аккаунты",
             body=(
-                "Accounts menu (stub).\n\n"
-                "Planned actions:\n"
-                "- Add account (phone-code)\n"
-                "- Add account (tdata)\n"
-                "- List / disable / remove\n"
+                "Управление аккаунтами:\n\n"
+                "- Добавить (код)\n"
+                "- Добавить (tdata)\n"
+                "- Список / выключить / удалить\n"
             ),
         )
     if key == cb.CHANNELS:
         return View(
             key=cb.CHANNELS,
-            title="Channels",
+            title="Каналы",
             body=(
-                "Manage channels list:\n\n"
-                "- Add public channel (@username or https://t.me/username)\n"
-                "- Add private channel (invite link)\n"
-                "- List / enable / disable\n"
+                "Управление каналами:\n\n"
+                "- Добавить public (@username или https://t.me/username)\n"
+                "- Добавить private (invite-link)\n"
+                "- Список / включить / выключить\n"
             ),
         )
     if key == cb.STATUS:
         return View(
             key=cb.STATUS,
-            title="Status",
-            body="Use /status or the Status button in the main menu.",
+            title="Статус",
+            body="Используйте /status или кнопку «Статус» в главном меню.",
         )
 
     if key == cb.ERRORS:
         return View(
             key=cb.ERRORS,
-            title="Errors",
-            body="Use /errors or the Errors button in the main menu.",
+            title="Ошибки",
+            body="Используйте /errors или кнопку «Ошибки» в главном меню.",
         )
-    return View(key=key, title="Unknown", body="Unknown view.")
+    return View(key=key, title="Неизвестно", body="Неизвестный экран.")

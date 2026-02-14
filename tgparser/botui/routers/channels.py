@@ -31,12 +31,12 @@ router = Router()
 
 def channels_actions_kb() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Add public", callback_data=cb.CH_ADD_PUBLIC)
-    kb.button(text="Add private", callback_data=cb.CH_ADD_PRIVATE)
-    kb.button(text="List", callback_data=cb.CH_LIST)
+    kb.button(text="Добавить public", callback_data=cb.CH_ADD_PUBLIC)
+    kb.button(text="Добавить private", callback_data=cb.CH_ADD_PRIVATE)
+    kb.button(text="Список", callback_data=cb.CH_LIST)
     kb.adjust(2, 1)
-    kb.button(text="← Back", callback_data=cb.MAIN)
-    kb.button(text="Refresh", callback_data=cb.CHANNELS)
+    kb.button(text="← Назад", callback_data=cb.MAIN)
+    kb.button(text="Обновить", callback_data=cb.CHANNELS)
     kb.adjust(2, 2)
     return kb
 
@@ -197,7 +197,7 @@ async def _attempt_join_on_add(*, channel_id: int) -> str:
 async def _render_channels_menu(q: CallbackQuery) -> None:
     if q.message:
         await q.message.edit_text(
-            "Channels\n\nChoose an action:",
+            "Каналы\n\nВыберите действие:",
             reply_markup=channels_actions_kb().as_markup(),
         )
 
@@ -220,18 +220,18 @@ async def ch_add_start(q: CallbackQuery, state: FSMContext) -> None:
     if q.message:
         if is_public:
             await q.message.answer(
-                "Send public channel identifier (examples):\n"
+                "Пришлите public канал (примеры):\n"
                 "- @username\n"
                 "- https://t.me/username\n\n"
-                "/cancel to abort"
+                "/cancel — отмена"
             )
         else:
             await q.message.answer(
-                "Send private invite link (examples):\n"
+                "Пришлите invite-link (примеры):\n"
                 "- https://t.me/+AbCdEf...\n"
                 "- https://t.me/joinchat/AbCdEf...\n\n"
-                "(You may also paste just the invite hash)\n\n"
-                "/cancel to abort"
+                "(можно вставить только hash)\n\n"
+                "/cancel — отмена"
             )
 
     await state.set_state(AddChannelFlow.identifier)
@@ -240,7 +240,7 @@ async def ch_add_start(q: CallbackQuery, state: FSMContext) -> None:
 @router.message(AddChannelFlow.identifier, Command("cancel"))
 async def ch_add_cancel(m: Message, state: FSMContext) -> None:
     await state.clear()
-    await m.answer("Cancelled.")
+    await m.answer("Ок, отменено.")
 
 
 @router.message(AddChannelFlow.identifier, F.text)
@@ -252,23 +252,23 @@ async def ch_add_identifier(m: Message, state: FSMContext) -> None:
     if ch_type == ChannelType.public:
         ident = normalize_public(raw)
         if not ident:
-            await m.answer("Invalid public channel identifier. Example: @durov or https://t.me/durov")
+            await m.answer("Неверный public идентификатор. Пример: @durov или https://t.me/durov")
             return
     else:
         ident = normalize_invite(raw)
         if not ident:
-            await m.answer("Invalid invite link/hash. Example: https://t.me/+AbCdEf...")
+            await m.answer("Неверный invite-link/hash. Пример: https://t.me/+AbCdEf...")
             return
 
     await state.update_data(identifier=ident)
-    await m.answer("Send backfill_days (0..365). Example: 0 (no backfill) or 30. /cancel to abort")
+    await m.answer("Пришлите backfill_days (0..365). Пример: 0 или 30.\n/cancel — отмена.")
     await state.set_state(AddChannelFlow.backfill_days)
 
 
 @router.message(AddChannelFlow.backfill_days, Command("cancel"))
 async def ch_add_cancel2(m: Message, state: FSMContext) -> None:
     await state.clear()
-    await m.answer("Cancelled.")
+    await m.answer("Ок, отменено.")
 
 
 @router.message(AddChannelFlow.backfill_days, F.text)

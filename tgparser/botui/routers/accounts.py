@@ -36,12 +36,12 @@ router = Router()
 
 def accounts_actions_kb() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Add (phone-code)", callback_data=cb.ACC_ADD_PHONE)
-    kb.button(text="Add (tdata)", callback_data=cb.ACC_ADD_TDATA)
-    kb.button(text="List", callback_data=cb.ACC_LIST)
+    kb.button(text="Добавить (код)", callback_data=cb.ACC_ADD_PHONE)
+    kb.button(text="Добавить (tdata)", callback_data=cb.ACC_ADD_TDATA)
+    kb.button(text="Список", callback_data=cb.ACC_LIST)
     kb.adjust(2, 1)
-    kb.button(text="← Back", callback_data=cb.MAIN)
-    kb.button(text="Refresh", callback_data=cb.ACCOUNTS)
+    kb.button(text="← Назад", callback_data=cb.MAIN)
+    kb.button(text="Обновить", callback_data=cb.ACCOUNTS)
     kb.adjust(2, 2)
     return kb
 
@@ -77,7 +77,7 @@ class FlowProfile:
 async def _render_accounts_menu(q: CallbackQuery) -> None:
     if q.message:
         await q.message.edit_text(
-            "Accounts\n\nChoose an action:",
+            "Аккаунты\n\nВыберите действие:",
             reply_markup=accounts_actions_kb().as_markup(),
         )
 
@@ -100,7 +100,7 @@ async def acc_add_phone_start(q: CallbackQuery, state: FSMContext) -> None:
 
     if q.message:
         await q.message.answer(
-            "Phone-code onboarding.\n\nSend proxy as http://user:pass@ip:port or /skip to continue without proxy.\n/cancel to abort."
+            "Онбординг по коду.\n\nПришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
         )
 
     await state.set_state(PhoneCodeFlow.proxy)
@@ -109,7 +109,7 @@ async def acc_add_phone_start(q: CallbackQuery, state: FSMContext) -> None:
 @router.message(PhoneCodeFlow.proxy, Command("skip"))
 async def acc_add_phone_proxy_skip(m: Message, state: FSMContext) -> None:
     await state.update_data(proxy_url=None)
-    await m.answer("Send phone number (international format, e.g. +79991234567). /cancel to abort")
+    await m.answer("Пришлите номер телефона в международном формате (например: +79991234567).\n/cancel — отмена.")
     await state.set_state(PhoneCodeFlow.phone)
 
 
@@ -118,7 +118,7 @@ async def acc_add_phone_proxy_set(m: Message, state: FSMContext) -> None:
     proxy_url = (m.text or "").strip()
     # Basic validation: store as-is, real parsing happens in telethon onboarding.
     await state.update_data(proxy_url=proxy_url)
-    await m.answer("Send phone number (international format, e.g. +79991234567). /cancel to abort")
+    await m.answer("Пришлите номер телефона в международном формате (например: +79991234567).\n/cancel — отмена.")
     await state.set_state(PhoneCodeFlow.phone)
 
 
@@ -144,7 +144,7 @@ async def acc_add_phone_phone(m: Message, state: FSMContext) -> None:
         phone_code_hash=start_info["phone_code_hash"],
     )
 
-    await m.answer("Code sent. Reply with the login code. /cancel to abort")
+    await m.answer("Код отправлен. Пришлите код входа.\n/cancel — отмена.")
     await state.set_state(PhoneCodeFlow.code)
 
 
@@ -172,7 +172,7 @@ async def acc_add_phone_code(m: Message, state: FSMContext) -> None:
 
         if isinstance(e, SessionPasswordNeededError):
             await state.update_data(code=code)
-            await m.answer("2FA password required. Send it now. /cancel to abort")
+            await m.answer("Нужен пароль 2FA. Пришлите его.\n/cancel — отмена.")
             await state.set_state(PhoneCodeFlow.two_fa)
             return
 
@@ -237,7 +237,7 @@ async def acc_add_tdata_start(q: CallbackQuery, state: FSMContext) -> None:
 
     if q.message:
         await q.message.answer(
-            "tdata onboarding.\n\nSend proxy as http://user:pass@ip:port or /skip to continue without proxy.\n/cancel to abort."
+            "Онбординг через tdata.\n\nПришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
         )
 
     await state.set_state(TdataFlow.proxy)
