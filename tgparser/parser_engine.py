@@ -232,12 +232,32 @@ async def parse_new_posts_once() -> ParseSummary:
                         max_seen_id = cursor
                         rows: list[dict] = []
 
-                        if cursor <= 0:
+                        backfill_days = max(0, int(db_ch.backfill_days or 0))
+                        backfill_since: datetime | None = None
+
+                        if cursor <= 0 and backfill_days > 0:
+                            # First parse for a channel: backfill up to N days of history.
+                            # We bound the total amount to avoid infinite history walks.
+                            backfill_since = now - timedelta(days=backfill_days)
+                            msg_iter = client.iter_messages(entity, limit=2000)
+                        elif cursor <= 0:
+                            # Default first parse when backfill is disabled.
                             msg_iter = client.iter_messages(entity, limit=20)
                         else:
+                            # Incremental: fetch messages after the cursor.
                             msg_iter = client.iter_messages(entity, min_id=cursor, reverse=True)
 
                         async for msg in msg_iter:
+                            published_at = getattr(msg, "date", None)
+                            if not isinstance(published_at, datetime):
+                                published_at = now
+                            if published_at.tzinfo is None:
+                                published_at = published_at.replace(tzinfo=timezone.utc)
+
+                            if backfill_since is not None and published_at < backfill_since:
+                                # Backfill mode: stop once we reached older than the threshold.
+                                break
+
                             text = _normalize_text(getattr(msg, "message", None))
                             if not text:
                                 continue
@@ -247,12 +267,6 @@ async def parse_new_posts_once() -> ParseSummary:
                                 continue
 
                             max_seen_id = max(max_seen_id, mid)
-
-                            published_at = getattr(msg, "date", None)
-                            if not isinstance(published_at, datetime):
-                                published_at = now
-                            if published_at.tzinfo is None:
-                                published_at = published_at.replace(tzinfo=timezone.utc)
 
                             rows.append(
                                 {
@@ -282,8 +296,10 @@ async def parse_new_posts_once() -> ParseSummary:
 
                         inserted_total += inserted
 
+                        mode = "backfill" if cursor <= 0 and backfill_since is not None else "incremental"
                         log.info(
-                            "parser: channel=%s ident=%s cursor=%s->%s fetched=%s inserted~=%s account_id=%s",
+                            "parser: mode=%s channel=%s ident=%s cursor=%s->%s fetched=%s inserted=%s account_id=%s",
+                            mode,
                             db_ch.id,
                             db_ch.identifier,
                             cursor,
