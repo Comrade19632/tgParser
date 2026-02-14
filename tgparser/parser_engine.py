@@ -217,9 +217,10 @@ async def parse_new_posts_once() -> ParseSummary:
                     # Avoid spamming join requests: if we already requested/pending for this account,
                     # do not call ImportChatInvite again.
                     # NOTE: For v1 we only attempt joining for private channels.
-                    if entity is None and db_ch.type == ChannelType.private and db_ch.access_status not in {
-                        ChannelAccessStatus.joined,
-                    }:
+                    # Private channels are identified by invite hash; dialogs lookup requires peer_id.
+                    # If entity is missing we must attempt ensure_joined even if access_status was already
+                    # marked active/joined (e.g. channel added earlier but peer_id wasn't captured yet).
+                    if entity is None and db_ch.type == ChannelType.private:
                         with SessionLocal() as db:
                             m = db.execute(
                                 select(AccountChannelMembership.status).where(

@@ -60,8 +60,11 @@ async def ensure_joined(*, client, ch: Channel) -> EnsureJoinedResult:
 
     now = datetime.now(timezone.utc)
 
-    # If already joined, no-op.
-    if ch.access_status in {ChannelAccessStatus.joined, ChannelAccessStatus.active}:
+    # NOTE: channel.access_status is global, while membership is per-account.
+    # For *private* channels we must be able to call ImportChatInviteRequest even if the
+    # channel was previously marked active/joined by some other account.
+    # For *public* channels, a joined/active status is sufficient to skip re-joining.
+    if ch.type == ChannelType.public and ch.access_status in {ChannelAccessStatus.joined, ChannelAccessStatus.active}:
         return EnsureJoinedResult(ok=True, entity=None, access_status=ch.access_status)
 
     try:
