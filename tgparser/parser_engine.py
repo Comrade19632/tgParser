@@ -151,6 +151,14 @@ async def parse_new_posts_once() -> ParseSummary:
             if acc is None:
                 break
 
+            log.info(
+                "selector: channel_id=%s channel_type=%s picked_account_id=%s reason=%s",
+                ch.id,
+                ch.type,
+                acc.id,
+                pick.reason,
+            )
+
             try:
                 async with pool.connected(account=acc) as client:
                     if not await client.is_user_authorized():
@@ -194,6 +202,30 @@ async def parse_new_posts_once() -> ParseSummary:
                             mem_status = m[0] if m else None
 
                         if mem_status in {AccountChannelStatus.join_requested, AccountChannelStatus.pending_approval}:
+                            exclude.add(acc.id)
+                            continue
+
+                        # Guardrail: never send a second join request if ANY account already has
+                        # a pending/join_requested membership for this channel.
+                        with SessionLocal() as db:
+                            any_pending = db.execute(
+                                select(AccountChannelMembership.id).where(
+                                    AccountChannelMembership.channel_id == ch.id,
+                                    AccountChannelMembership.status.in_(
+                                        [
+                                            AccountChannelStatus.join_requested,
+                                            AccountChannelStatus.pending_approval,
+                                        ]
+                                    ),
+                                )
+                            ).first()
+
+                        if any_pending:
+                            log.info(
+                                "join_guardrail: channel_id=%s skip_join account_id=%s reason=other_account_pending",
+                                ch.id,
+                                acc.id,
+                            )
                             exclude.add(acc.id)
                             continue
 
