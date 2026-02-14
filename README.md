@@ -30,5 +30,9 @@ See [RUNBOOK.md](./RUNBOOK.md) for deployment/update/logs/backup steps.
 
 Release acceptance checklist: [ACCEPTANCE.md](./ACCEPTANCE.md)
 
+## Integrations
+
+HTTP API docs: [INTEGRATION.md](./INTEGRATION.md)
+
 ## Notes
 - This repo is intentionally scaffold-first. Implementations for account onboarding flows (phone code / tdata) are referenced from `tgreact` but not vendored here.

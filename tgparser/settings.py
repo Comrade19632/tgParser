@@ -19,5 +19,11 @@ class Settings(BaseSettings):
 
     # Telethon API credentials are stored per-account in DB (not in env).
 
+    # Separate client token for the HTTP API (NOT the OpenClaw AGENT_SERVICE_TOKEN).
+    service_api_token: str = ""
+
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+
 
 settings = Settings()

@@ -53,6 +53,17 @@ services:
     command: ["python", "-m", "tgparser.worker"]
     restart: unless-stopped
 
+  api:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["uvicorn", "tgparser.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:

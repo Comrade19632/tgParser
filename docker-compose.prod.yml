@@ -46,6 +46,17 @@ services:
         max-size: "10m"
         max-file: "5"
 
+  api:
+    restart: unless-stopped
+    ports:
+      # Expose only to localhost by default; put Caddy/Nginx in front if you want public access.
+      - "127.0.0.1:${TG_PARSER_API_PORT:-18081}:8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
 volumes:
   pgdata:
     name: tgparser_pgdata
