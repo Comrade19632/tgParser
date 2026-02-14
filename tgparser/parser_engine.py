@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -23,6 +23,27 @@ from .telethon.selector import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _mark_account_cooldown(*, account_id: int, seconds: int, note: str, now: datetime) -> None:
+    """Persist FloodWait cooldown for the account.
+
+    Selector respects cooldown_until, so this prevents the account from being
+    picked again within the same tick.
+    """
+
+    seconds = max(0, int(seconds or 0))
+
+    with SessionLocal() as db:
+        acc = db.get(Account, account_id)
+        if not acc:
+            return
+
+        acc.status = AccountStatus.cooldown
+        acc.cooldown_until = now + timedelta(seconds=seconds)
+        acc.last_error = (note or "")[:5000]
+        acc.updated_at = now
+        db.commit()
 
 
 @dataclass(frozen=True)
@@ -293,6 +314,21 @@ async def parse_new_posts_once() -> ParseSummary:
                     channels_skipped_no_account=0,
                     posts_inserted=inserted_total,
                 )
+            except errors.FloodWaitError as e:
+                # Rate limit on this account. Persist cooldown and continue with other accounts.
+                last_exc = e
+                exclude.add(acc.id)
+
+                seconds = int(getattr(e, "seconds", 0) or 0)
+                _mark_account_cooldown(
+                    account_id=acc.id,
+                    seconds=seconds,
+                    note=f"FloodWait {seconds}s",
+                    now=now,
+                )
+
+                log.warning("parser: floodwait account_id=%s seconds=%s", acc.id, seconds)
+                continue
             except errors.FloodError as e:
                 last_exc = e
                 exclude.add(acc.id)
