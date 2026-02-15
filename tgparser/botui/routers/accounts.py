@@ -107,8 +107,8 @@ async def acc_add_phone_start(q: CallbackQuery, state: FSMContext) -> None:
     if q.message:
         await q.message.answer(
             "Онбординг по коду.\n\n"
-            "Если нужно — пришлите кастомные API креды приложения:\n"
-            "APP <api_id> <api_hash>\n"
+            "Если нужно — пришлите кастомные API креды приложения (2 значения через пробел):\n"
+            "<api_id> <api_hash>\n"
             "или /skip чтобы использовать дефолтные.\n/cancel — отмена."
         )
 
@@ -151,8 +151,8 @@ async def acc_reauth_phone_start(q: CallbackQuery, state: FSMContext) -> None:
     if q.message:
         await q.message.answer(
             f"Переавторизация аккаунта #{account_id} (по коду).\n\n"
-            "Если нужно — пришлите кастомные API креды приложения:\n"
-            "APP <api_id> <api_hash>\n"
+            "Если нужно — пришлите кастомные API креды приложения (2 значения через пробел):\n"
+            "<api_id> <api_hash>\n"
             "или /skip чтобы использовать сохранённые/дефолтные.\n/cancel — отмена."
         )
 
@@ -172,17 +172,17 @@ async def acc_add_phone_app_skip(m: Message, state: FSMContext) -> None:
 async def acc_add_phone_app_set(m: Message, state: FSMContext) -> None:
     text = (m.text or "").strip()
     parts = text.split()
-    if len(parts) != 3 or parts[0].upper() != "APP":
-        await m.answer("Формат: APP <api_id> <api_hash> (или /skip)")
+    if len(parts) != 2:
+        await m.answer("Формат: <api_id> <api_hash> (или /skip)")
         return
 
     try:
-        api_id = int(parts[1])
-        api_hash = parts[2].strip()
+        api_id = int(parts[0])
+        api_hash = parts[1].strip()
         if not api_hash:
             raise ValueError("empty api_hash")
     except Exception:
-        await m.answer("Не удалось распарсить. Формат: APP <api_id> <api_hash>")
+        await m.answer("Не удалось распарсить. Формат: <api_id> <api_hash>")
         return
 
     data = await state.get_data()
@@ -333,8 +333,8 @@ async def acc_add_tdata_start(q: CallbackQuery, state: FSMContext) -> None:
     if q.message:
         await q.message.answer(
             "Онбординг через tdata.\n\n"
-            "Если нужно — пришлите кастомные API креды приложения:\n"
-            "APP <api_id> <api_hash>\n"
+            "Если нужно — пришлите кастомные API креды приложения (2 значения через пробел):\n"
+            "<api_id> <api_hash>\n"
             "или /skip чтобы использовать дефолтные.\n/cancel — отмена."
         )
 
@@ -394,17 +394,17 @@ async def acc_add_tdata_app_skip(m: Message, state: FSMContext) -> None:
 async def acc_add_tdata_app_set(m: Message, state: FSMContext) -> None:
     text = (m.text or "").strip()
     parts = text.split()
-    if len(parts) != 3 or parts[0].upper() != "APP":
-        await m.answer("Формат: APP <api_id> <api_hash> (или /skip)")
+    if len(parts) != 2:
+        await m.answer("Формат: <api_id> <api_hash> (или /skip)")
         return
 
     try:
-        api_id = int(parts[1])
-        api_hash = parts[2].strip()
+        api_id = int(parts[0])
+        api_hash = parts[1].strip()
         if not api_hash:
             raise ValueError("empty api_hash")
     except Exception:
-        await m.answer("Не удалось распарсить. Формат: APP <api_id> <api_hash>")
+        await m.answer("Не удалось распарсить. Формат: <api_id> <api_hash>")
         return
 
     data = await state.get_data()
@@ -538,7 +538,14 @@ async def acc_add_tdata_wrong_payload(m: Message) -> None:
 @router.message(Command("cancel"))
 async def flow_cancel(m: Message, state: FSMContext) -> None:
     await state.clear()
-    await m.answer("Cancelled.")
+    await m.answer("Отменено.")
+
+
+# Some clients may send "/cancel@botname" or extra text; handle it too.
+@router.message(F.text.startswith("/cancel"))
+async def flow_cancel_text(m: Message, state: FSMContext) -> None:
+    await state.clear()
+    await m.answer("Отменено.")
 
 
 async def _create_or_update_account(

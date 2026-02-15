@@ -90,7 +90,7 @@ async def ensure_membership_once(*, max_channels: int = 50) -> MembershipSummary
     on join attempts and "not in dialogs" edge-cases.
 
     Policy (v1):
-    - Focus on PRIVATE channels (public channels are parsable by username even without join).
+    - Maintain membership for PRIVATE and PUBLIC channels (to reduce get_entity resolves by relying on dialogs cache).
     - For join_requested/pending_approval, never re-send invites; only re-check dialogs.
     - Respect account cooldown and mark cooldown on FloodWait.
     - Keep work bounded per tick.
@@ -115,7 +115,7 @@ async def ensure_membership_once(*, max_channels: int = 50) -> MembershipSummary
             ).scalars()
         )
 
-    channels = [c for c in channels if c.type == ChannelType.private]
+    # Include public channels too: by joining once we can often resolve entity via dialogs.
     channels = channels[: max(0, int(max_channels))]
 
     summary = MembershipSummary(channels_total=len(channels))
