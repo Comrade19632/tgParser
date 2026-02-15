@@ -240,7 +240,18 @@ async def ensure_membership_once(*, max_channels: int = 50) -> MembershipSummary
                             db.commit()
                     continue
 
-                res = await ensure_joined(client=client, ch=ch)
+                res = await ensure_joined(client=client, ch=ch, force=True)
+
+            log.info(
+                "membership: ensure_joined channel_id=%s type=%s ident=%s account_id=%s ok=%s access=%s note=%s",
+                ch.id,
+                ch.type,
+                ch.identifier,
+                acc.id,
+                res.ok,
+                getattr(res.access_status, "value", None),
+                (res.note or "")[:200],
+            )
 
             if res.access_status is not None:
                 if res.access_status.value == "joined":

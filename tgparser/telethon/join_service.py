@@ -50,7 +50,7 @@ def _extract_invite_hash(invite_link_or_hash: str) -> str:
     return ""
 
 
-async def ensure_joined(*, client, ch: Channel) -> EnsureJoinedResult:
+async def ensure_joined(*, client, ch: Channel, force: bool = False) -> EnsureJoinedResult:
     """Ensure channel membership.
 
     Goal: reduce expensive resolve/get_entity calls by joining once and then relying on dialogs.
@@ -64,7 +64,11 @@ async def ensure_joined(*, client, ch: Channel) -> EnsureJoinedResult:
     # For *private* channels we must be able to call ImportChatInviteRequest even if the
     # channel was previously marked active/joined by some other account.
     # For *public* channels, a joined/active status is sufficient to skip re-joining.
-    if ch.type == ChannelType.public and ch.access_status in {ChannelAccessStatus.joined, ChannelAccessStatus.active}:
+    if (
+        (not force)
+        and ch.type == ChannelType.public
+        and ch.access_status in {ChannelAccessStatus.joined, ChannelAccessStatus.active}
+    ):
         return EnsureJoinedResult(ok=True, entity=None, access_status=ch.access_status)
 
     try:
