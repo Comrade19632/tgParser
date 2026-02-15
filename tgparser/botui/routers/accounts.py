@@ -56,6 +56,7 @@ def account_row_kb(*, account_id: int, is_active: bool, page: int = 0) -> Inline
 
 
 class PhoneCodeFlow(StatesGroup):
+    app = State()
     proxy = State()
     phone = State()
     code = State()
@@ -63,6 +64,7 @@ class PhoneCodeFlow(StatesGroup):
 
 
 class TdataFlow(StatesGroup):
+    app = State()
     proxy = State()
     two_fa = State()
     tdata = State()
@@ -104,10 +106,13 @@ async def acc_add_phone_start(q: CallbackQuery, state: FSMContext) -> None:
 
     if q.message:
         await q.message.answer(
-            "Онбординг по коду.\n\nПришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+            "Онбординг по коду.\n\n"
+            "Если нужно — пришлите кастомные API креды приложения:\n"
+            "APP <api_id> <api_hash>\n"
+            "или /skip чтобы использовать дефолтные.\n/cancel — отмена."
         )
 
-    await state.set_state(PhoneCodeFlow.proxy)
+    await state.set_state(PhoneCodeFlow.app)
 
 
 @router.callback_query(F.data.startswith(f"{cb.ACC_REAUTH_PHONE}:"))
@@ -127,44 +132,68 @@ async def acc_reauth_phone_start(q: CallbackQuery, state: FSMContext) -> None:
 
     profile = generate_device_profile(app_version="5.8.3 x64")
 
-    # Try to reuse phone/proxy from previous authorization.
+    # Try to reuse api creds / phone / proxy from previous authorization.
     with SessionLocal() as db:
         acc = db.get(Account, account_id)
         phone_number = (acc.phone_number or "").strip() if acc else ""
         proxy_url = (acc.proxy_url or "").strip() if acc else ""
+        # Prefer stored api creds if present
+        if acc and acc.api_id and acc.api_hash:
+            p = profile.__dict__.copy()
+            p["api_id"] = int(acc.api_id)
+            p["api_hash"] = str(acc.api_hash)
+            profile_dict = p
+        else:
+            profile_dict = profile.__dict__
 
-    await state.update_data(profile=profile.__dict__, proxy_url=(proxy_url or None), reauth_account_id=account_id)
-
-    # Fast path: if we have phone number, immediately send code using stored proxy (if any).
-    if phone_number:
-        try:
-            start_info = await phone_code_start(
-                phone_number=phone_number,
-                profile=profile,
-                proxy_url=(proxy_url or None),
-            )
-            await state.update_data(
-                phone_number=phone_number,
-                session_string=start_info["session_string"],
-                phone_code_hash=start_info["phone_code_hash"],
-            )
-            if q.message:
-                await q.message.answer(
-                    f"Переавторизация аккаунта #{account_id} (по коду).\n\n"
-                    "Код отправлен. Пришлите код входа.\n/cancel — отмена."
-                )
-            await state.set_state(PhoneCodeFlow.code)
-            return
-        except Exception:
-            # Fallback: ask for proxy/phone manually.
-            pass
+    await state.update_data(profile=profile_dict, proxy_url=(proxy_url or None), reauth_account_id=account_id)
 
     if q.message:
         await q.message.answer(
             f"Переавторизация аккаунта #{account_id} (по коду).\n\n"
-            "Пришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+            "Если нужно — пришлите кастомные API креды приложения:\n"
+            "APP <api_id> <api_hash>\n"
+            "или /skip чтобы использовать сохранённые/дефолтные.\n/cancel — отмена."
         )
 
+    await state.set_state(PhoneCodeFlow.app)
+
+
+@router.message(PhoneCodeFlow.app, Command("skip"))
+async def acc_add_phone_app_skip(m: Message, state: FSMContext) -> None:
+    # Keep generated / stored profile as-is
+    await m.answer(
+        "Пришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+    )
+    await state.set_state(PhoneCodeFlow.proxy)
+
+
+@router.message(PhoneCodeFlow.app, F.text)
+async def acc_add_phone_app_set(m: Message, state: FSMContext) -> None:
+    text = (m.text or "").strip()
+    parts = text.split()
+    if len(parts) != 3 or parts[0].upper() != "APP":
+        await m.answer("Формат: APP <api_id> <api_hash> (или /skip)")
+        return
+
+    try:
+        api_id = int(parts[1])
+        api_hash = parts[2].strip()
+        if not api_hash:
+            raise ValueError("empty api_hash")
+    except Exception:
+        await m.answer("Не удалось распарсить. Формат: APP <api_id> <api_hash>")
+        return
+
+    data = await state.get_data()
+    prof = dict(data.get("profile") or {})
+    prof["api_id"] = api_id
+    prof["api_hash"] = api_hash
+    await state.update_data(profile=prof)
+
+    await m.answer(
+        "Ок. Теперь пришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+    )
     await state.set_state(PhoneCodeFlow.proxy)
 
 
@@ -303,10 +332,13 @@ async def acc_add_tdata_start(q: CallbackQuery, state: FSMContext) -> None:
 
     if q.message:
         await q.message.answer(
-            "Онбординг через tdata.\n\nПришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+            "Онбординг через tdata.\n\n"
+            "Если нужно — пришлите кастомные API креды приложения:\n"
+            "APP <api_id> <api_hash>\n"
+            "или /skip чтобы использовать дефолтные.\n/cancel — отмена."
         )
 
-    await state.set_state(TdataFlow.proxy)
+    await state.set_state(TdataFlow.app)
 
 
 @router.callback_query(F.data.startswith(f"{cb.ACC_REAUTH_TDATA}:"))
@@ -329,17 +361,62 @@ async def acc_reauth_tdata_start(q: CallbackQuery, state: FSMContext) -> None:
     with SessionLocal() as db:
         acc = db.get(Account, account_id)
         proxy_url = (acc.proxy_url or "").strip() if acc else ""
+        if acc and acc.api_id and acc.api_hash:
+            p = profile.__dict__.copy()
+            p["api_id"] = int(acc.api_id)
+            p["api_hash"] = str(acc.api_hash)
+            profile_dict = p
+        else:
+            profile_dict = profile.__dict__
 
-    await state.update_data(profile=profile.__dict__, proxy_url=(proxy_url or None), two_fa=None, reauth_account_id=account_id)
+    await state.update_data(profile=profile_dict, proxy_url=(proxy_url or None), two_fa=None, reauth_account_id=account_id)
 
-    # For tdata flow we still need upload, but we can skip asking proxy again.
     if q.message:
         await q.message.answer(
             f"Переавторизация аккаунта #{account_id} (через tdata).\n\n"
-            "Если нужен пароль 2FA — пришлите его сейчас, или /skip чтобы продолжить без 2FA.\n/cancel — отмена."
+            "Если нужно — пришлите кастомные API креды приложения:\n"
+            "APP <api_id> <api_hash>\n"
+            "или /skip чтобы использовать сохранённые/дефолтные.\n/cancel — отмена."
         )
 
-    await state.set_state(TdataFlow.two_fa)
+    await state.set_state(TdataFlow.app)
+
+
+@router.message(TdataFlow.app, Command("skip"))
+async def acc_add_tdata_app_skip(m: Message, state: FSMContext) -> None:
+    await m.answer(
+        "Пришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+    )
+    await state.set_state(TdataFlow.proxy)
+
+
+@router.message(TdataFlow.app, F.text)
+async def acc_add_tdata_app_set(m: Message, state: FSMContext) -> None:
+    text = (m.text or "").strip()
+    parts = text.split()
+    if len(parts) != 3 or parts[0].upper() != "APP":
+        await m.answer("Формат: APP <api_id> <api_hash> (или /skip)")
+        return
+
+    try:
+        api_id = int(parts[1])
+        api_hash = parts[2].strip()
+        if not api_hash:
+            raise ValueError("empty api_hash")
+    except Exception:
+        await m.answer("Не удалось распарсить. Формат: APP <api_id> <api_hash>")
+        return
+
+    data = await state.get_data()
+    prof = dict(data.get("profile") or {})
+    prof["api_id"] = api_id
+    prof["api_hash"] = api_hash
+    await state.update_data(profile=prof)
+
+    await m.answer(
+        "Ок. Теперь пришлите proxy (http://user:pass@ip:port) или /skip чтобы продолжить без proxy.\n/cancel — отмена."
+    )
+    await state.set_state(TdataFlow.proxy)
 
 
 @router.message(TdataFlow.proxy, Command("skip"))
