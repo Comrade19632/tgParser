@@ -128,14 +128,16 @@ async def ensure_membership_once(*, max_channels: int = 50) -> MembershipSummary
     cooldown_marked = 0
     touched = 0
 
-    # Simple deterministic selection: for each channel pick the first ready account.
-    # (Selector already does smarter rotation during parsing.)
+    # Ensure membership for multiple accounts (bounded): owner expects attached accounts to be
+    # actually joined/subscribed, so dialogs cache can be used and get_entity calls reduced.
     for ch in channels:
-        acc = next((a for a in accounts if _account_ready(a, now=now)), None)
-        if acc is None:
+        ready_accounts = [a for a in accounts if _account_ready(a, now=now)]
+        if not ready_accounts:
             continue
 
-        touched += 1
+        # Bound work: try at most 2 accounts per channel per tick.
+        for acc in ready_accounts[:2]:
+            touched += 1
 
         with SessionLocal() as db:
             mem = db.execute(
