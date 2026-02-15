@@ -300,6 +300,27 @@ async def ensure_membership_once(*, max_channels: int = 50) -> MembershipSummary
                     )
                     memberships_updated += 1
 
+                # Best-effort: update global channel fields too (access_status + peer_id/title)
+                try:
+                    with SessionLocal() as db:
+                        db_ch = db.get(Channel, ch.id)
+                        if db_ch:
+                            db_ch.last_checked_at = now
+                            db_ch.access_status = res.access_status
+                            db_ch.last_error = res.note if not res.ok else ""
+
+                            ent = res.entity
+                            ent_id = getattr(ent, "id", None)
+                            if isinstance(ent_id, int) and ent_id:
+                                db_ch.peer_id = int(ent_id)
+                            ent_title = getattr(ent, "title", None)
+                            if isinstance(ent_title, str) and ent_title.strip():
+                                db_ch.title = ent_title.strip()
+
+                            db.commit()
+                except Exception:
+                    log.exception("membership: channel update failed channel_id=%s", ch.id)
+
             fw = _parse_floodwait_seconds(res.note)
             if fw is not None:
                 _mark_account_cooldown(account_id=acc.id, seconds=fw, note=res.note, now=now)
